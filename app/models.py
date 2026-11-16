@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(128))
+    role: Mapped[str] = mapped_column(String(24), default="admin")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Operator(Base):
+    __tablename__ = "operators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    external_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    calls: Mapped[list[Call]] = relationship(back_populates="operator")
+
+
+class Call(Base):
+    __tablename__ = "calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    orig_filename: Mapped[str] = mapped_column(String(260))
+    stored_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    mime: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    operator_id: Mapped[int | None] = mapped_column(ForeignKey("operators.id"), nullable=True, index=True)
+    call_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    is_demo: Mapped[int] = mapped_column(Integer, default=0)
+    processed_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    operator_first: Mapped[int] = mapped_column(Integer, default=1)
+
+    operator: Mapped[Operator | None] = relationship(back_populates="calls")
+    transcript: Mapped[Transcript | None] = relationship(back_populates="call", uselist=False, cascade="all, delete-orphan")
+    quality: Mapped[Quality | None] = relationship(back_populates="call", uselist=False, cascade="all, delete-orphan")
+
+
+class Transcript(Base):
+    __tablename__ = "transcripts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("calls.id"), unique=True)
+    full_text: Mapped[str] = mapped_column(Text, default="")
+    segments_json: Mapped[str] = mapped_column(Text, default="[]")
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    call: Mapped[Call] = relationship(back_populates="transcript")
+
+
+class Quality(Base):
+    __tablename__ = "quality"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    call_id: Mapped[int] = mapped_column(ForeignKey("calls.id"), unique=True)
+    politeness: Mapped[float] = mapped_column(Float, default=0)
+    completeness: Mapped[float] = mapped_column(Float, default=0)
+    script_compliance: Mapped[float] = mapped_column(Float, default=0)
+    resolution: Mapped[float] = mapped_column(Float, default=0)
+    overall: Mapped[float] = mapped_column(Float, default=0)
+    tonality: Mapped[str] = mapped_column(String(16), default="neutral")
+    tonality_score: Mapped[float] = mapped_column(Float, default=0)
+    avg_response_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    talk_ratio_operator: Mapped[float] = mapped_column(Float, default=0)
+    violation_pct: Mapped[float] = mapped_column(Float, default=0)
+    violations_json: Mapped[str] = mapped_column(Text, default="[]")
+    recommendations_json: Mapped[str] = mapped_column(Text, default="[]")
+    checks_json: Mapped[str] = mapped_column(Text, default="[]")
+    summary: Mapped[str] = mapped_column(Text, default="")
+
+    call: Mapped[Call] = relationship(back_populates="quality")
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>РечьКонтроль · Центр-инвест</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div id="login" class="gate">
+    <section class="gate-left">
+      <div class="gate-brand">
+        <svg viewBox="0 0 32 32" width="40" height="40" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#0c1f18"/>
+          <path d="M8 18c2-6 4.5-9 8-9s6 3 8 9" fill="none" stroke="#d4b56a" stroke-width="2"/>
+          <circle cx="16" cy="21" r="3" fill="#3d9a68"/>
+        </svg>
+        <div>
+          <div class="brand">РечьКонтроль</div>
+          <div class="brand-sub">ПАО КБ «Центр-инвест»</div>
+        </div>
+      </div>
+      <blockquote>
+        Качество разговора — это актив банка. Расшифровка и оценка остаются внутри вашего контура.
+      </blockquote>
+      <ul class="gate-points">
+        <li>Whisper работает на этой машине</li>
+        <li>Аудио шифруется на диске</li>
+        <li>Записи и текст наружу не уходят</li>
+      </ul>
+    </section>
+    <section class="gate-right">
+      <p class="eyebrow">Вход в кабинет качества</p>
+      <h1>Локальный контур контроля звонков</h1>
+      <form id="login-form" autocomplete="on">
+        <label>Логин<input name="username" autocomplete="username" required maxlength="64" /></label>
+        <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128" /></label>
+        <button type="submit" class="btn primary">Войти в кабинет</button>
+        <p class="form-error" id="login-error" hidden></p>
+      </form>
+      <p class="hint">Учётная запись задаётся в <code>.env</code> на этой машине.</p>
+    </section>
+  </div>
+
+  <div id="shell" class="shell" hidden>
+    <aside class="side">
+      <div class="side-brand">
+        <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#12261c"/>
+          <path d="M8 18c2-6 4.5-9 8-9s6 3 8 9" fill="none" stroke="#d4b56a" stroke-width="2"/>
+          <circle cx="16" cy="21" r="3" fill="#3d9a68"/>
+        </svg>
+        <div>
+          <strong>РечьКонтроль</strong>
+          <span>локальный контур</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#/" data-nav="dashboard"><em>01</em> Обзор</a>
+        <a href="#/calls" data-nav="calls"><em>02</em> Звонки</a>
+        <a href="#/upload" data-nav="upload"><em>03</em> Загрузить</a>
+        <a href="#/operators" data-nav="operators"><em>04</em> Операторы</a>
+        <a href="#/export" data-nav="export"><em>05</em> Экспорт</a>
+        <a href="#/settings" data-nav="settings"><em>06</em> Скрипт</a>
+      </nav>
+      <div class="side-lock">
+        <span class="dot"></span>
+        <div>
+          <b>Контур закрыт</b>
+          <span>аудио и текст не покидают машину</span>
+        </div>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="top">
+        <div>
+          <p class="eyebrow" id="page-kicker">Кабинет качества</p>
+          <h1 id="page-title">Обзор</h1>
+          <p id="page-sub" class="muted">Контроль качества коммуникаций контакт-центра</p>
+        </div>
+        <div class="top-right">
+          <div id="queue-chip" class="chip" title="Очередь обработки">очередь пуста</div>
+          <div class="who">
+            <span id="who-name">admin</span>
+            <button id="logout" class="btn ghost" type="button">Выйти</button>
+          </div>
+        </div>
+      </header>
+      <div id="view" class="view"></div>
+    </div>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
