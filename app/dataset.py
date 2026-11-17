@@ -9,9 +9,9 @@ import uuid
 
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-from datetime import datetime
 from pathlib import Path
 
+from app.timeutil import utcnow
 from app.config import settings
 from app.crypto import encrypt_bytes
 from app.db import SessionLocal
@@ -166,7 +166,7 @@ def download_minds14(limit: int = DEFAULT_LIMIT) -> dict:
         "config": DATASET_CONFIG,
         "license": "CC-BY-NC-4.0",
         "description": "Банковские голосовые запросы MInDS-14, русский, эталонные расшифровки.",
-        "downloaded_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "downloaded_at": utcnow().isoformat(timespec="seconds"),
         "clips": items,
     }
     (settings.dataset_dir / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -292,7 +292,7 @@ def import_to_queue(limit: int | None = None) -> list[int]:
                     stored_name=stored,
                     mime="audio/wav",
                     operator_id=op.id,
-                    call_at=datetime.utcnow(),
+                    call_at=utcnow(),
                     status="queued",
                     progress=0,
                     is_demo=0,

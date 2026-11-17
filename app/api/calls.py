@@ -11,13 +11,14 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.timeutil import utcnow
 from app.access import is_operator, limit_calls, reject_operator, require_call
 from app.api.deps import current_user, db_session, require_admin
 from app.api.serializers import call_detail, call_item, operator_out
 from app.audio import AudioError, sniff_audio
 from app.audit import write_audit
 from app.config import settings
-from app.crypto import decrypt_bytes, encrypt_bytes
+from app.crypto import EncryptedWriter, decrypt_bytes
 from app.db import after_commit, write_lock
 from app.diarize import assign_roles, label_speakers, merge_whisper_segments
 from app.models import Call, Operator, Transcript, User
@@ -121,18 +122,41 @@ def get_call(
     return call_detail(call, unmasked=unmasked)
 
 
-async def _read_limited(upload: UploadFile, max_bytes: int) -> bytes:
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        block = await upload.read(1024 * 256)
-        if not block:
-            break
-        total += len(block)
-        if total > max_bytes:
-            raise HTTPException(413, f"{upload.filename}: файл больше {settings.max_upload_mb} МБ")
-        chunks.append(block)
-    return b"".join(chunks)
+async def _store_encrypted(upload: UploadFile, path: Path, max_bytes: int) -> str:
+    """Читает загрузку блоками, проверяет сигнатуру по первому блоку и сразу пишет шифротекст на диск."""
+    name = upload.filename or "audio.wav"
+    declared = getattr(upload, "size", None)
+    if declared is not None and declared > max_bytes:
+        raise HTTPException(413, f"{name}: файл больше {settings.max_upload_mb} МБ")
+    writer = None
+    mime = None
+    head = b""
+    try:
+        while True:
+            block = await upload.read(1024 * 256)
+            if not block:
+                break
+            if writer is None:
+                head += block
+                if len(head) < 64:
+                    continue
+                try:
+                    mime = sniff_audio(head[:16], name)
+                except AudioError as exc:
+                    raise HTTPException(400, f"{name}: {exc}") from exc
+                writer = EncryptedWriter(path)
+                block, head = head, b""
+            writer.write(block)
+            if writer.size > max_bytes:
+                raise HTTPException(413, f"{name}: файл больше {settings.max_upload_mb} МБ")
+        if writer is None:
+            raise HTTPException(400, f"{name}: файл слишком маленький")
+        writer.close()
+    except BaseException:
+        if writer is not None:
+            writer.abort()
+        raise
+    return mime or "application/octet-stream"
 
 
 @router.post("/calls/upload", response_model=list[CallListItem])
@@ -151,7 +175,7 @@ async def upload_calls(
         raise HTTPException(400, "Добавьте хотя бы один аудиофайл")
     if len(files) > settings.max_upload_files:
         raise HTTPException(400, f"За один раз можно загрузить не больше {settings.max_upload_files} файлов")
-    when = datetime.utcnow()
+    when = utcnow()
     if call_at:
         try:
             when = datetime.fromisoformat(call_at.replace("Z", ""))
@@ -163,16 +187,9 @@ async def upload_calls(
     max_bytes = settings.max_upload_mb * 1024 * 1024
     try:
         for upload in files:
-            data = await _read_limited(upload, max_bytes)
-            if len(data) < 64:
-                raise HTTPException(400, f"{upload.filename}: файл слишком маленький")
-            try:
-                mime = sniff_audio(data[:16], upload.filename or "audio.wav")
-            except AudioError as exc:
-                raise HTTPException(400, f"{upload.filename}: {exc}") from exc
             stored = f"{uuid.uuid4().hex}.bin"
             path = settings.audio_dir / stored
-            path.write_bytes(encrypt_bytes(data))
+            mime = await _store_encrypted(upload, path, max_bytes)
             stored_paths.append(path)
             call = Call(
                 orig_filename=sanitize_filename(upload.filename),

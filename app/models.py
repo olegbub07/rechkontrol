@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.timeutil import utcnow
 from app.db import Base
 
 
@@ -20,7 +21,7 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("operators.id"), nullable=True)
     must_change_password: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Operator(Base):
@@ -29,7 +30,7 @@ class Operator(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     external_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     calls: Mapped[list[Call]] = relationship(back_populates="operator")
 
@@ -43,8 +44,8 @@ class Call(Base):
     mime: Mapped[str | None] = mapped_column(String(80), nullable=True)
     duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("operators.id"), nullable=True, index=True)
-    call_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    call_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -118,7 +119,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     username: Mapped[str] = mapped_column(String(64), default="")
     action: Mapped[str] = mapped_column(String(64), index=True)
     detail: Mapped[str] = mapped_column(Text, default="")

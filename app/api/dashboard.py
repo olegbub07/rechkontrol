@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 
+from app.timeutil import utcnow
 from app.access import limit_calls
 from app.api.deps import current_user, db_session
 from app.api.serializers import call_item, operator_out
@@ -17,7 +18,7 @@ router = APIRouter(tags=["dashboard"])
 
 
 def _period_start(period: str) -> datetime | None:
-    now = datetime.utcnow()
+    now = utcnow()
     if period == "7d":
         return now - timedelta(days=7)
     if period == "30d":
@@ -96,7 +97,7 @@ def dashboard(
         [c for c in done if c.quality.overall < 60 or c.quality.violation_pct >= 40],
         key=lambda c: (c.quality.overall, -c.quality.violation_pct),
     )[:6]
-    today = datetime.utcnow().date()
+    today = utcnow().date()
     day_start = datetime(today.year, today.month, today.day)
 
     def scoped(status: str):

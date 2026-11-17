@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
+from app.timeutil import utcnow
 from app.api.deps import bearer, current_user, db_session
 from app.audit import write_audit
 from app.auth import (
@@ -19,7 +19,6 @@ from app.auth import (
     needs_password_change,
     verify_password,
 )
-from app.config import settings
 from app.models import User
 from app.passwords import PasswordError, validate_password
 from app.schemas import LoginIn, PasswordChangeIn, TokenOut, UserOut
@@ -54,7 +53,7 @@ def login(body: LoginIn, request: Request, session: Session = Depends(db_session
         note_login_failure(key, body.username.strip(), request)
         raise HTTPException(status_code=401, detail="Учётная запись отключена")
     clear_login_failures(key)
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = utcnow()
     write_audit(session, "login", user=user, request=request)
     return TokenOut(token=create_token(user), user=_user_out(user))
 
