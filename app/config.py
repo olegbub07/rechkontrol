@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     allow_remote: bool = False
     # Маскирование ПДн в выдаче и экспорте. Исходный текст видит только администратор по явному запросу.
     pii_masking: bool = True
+    # Озвучка демо-звонков (Silero TTS, нужен torch из requirements-voice.txt). По умолчанию выключена:
+    # без неё программа при старте ничего не скачивает.
+    demo_voice_enabled: bool = False
+    demo_voice_model_url: str = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
+    # SHA-256 файла v4_ru.pt, снят 17.11.2026. Файл с другим хешем не загружается.
+    demo_voice_model_sha256: str = "896ab96347d5bd781ab97959d4fd6885620e5aab52405d3445626eb7c1414b00"
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0

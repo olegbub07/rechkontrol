@@ -587,7 +587,7 @@ async function renderCall(view, id) {
         <p class="muted" id="live-label"></p>
         ${live ? `<div class="progress" id="live-bar"><span id="live-progress" style="width:${call.progress || 4}%"></span></div>` : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
         <h3 class="player-title">Прослушивание</h3>
-        <div id="player-box">${call.has_audio ? "<p class='muted'>Загрузка записи…</p>" : call.is_demo ? "<p class='muted'>Запись готовится на этой машине. Плеер появится сам.</p>" : "<p class='muted'>У этого звонка ещё нет аудиофайла.</p>"}</div>
+        <div id="player-box">${call.has_audio ? "<p class='muted'>Загрузка записи…</p>" : call.is_demo ? "<p class='muted'>У демо-звонка пока нет записи. Озвучка включается настройкой DEMO_VOICE_ENABLED (docs/RUN.md), тогда плеер появится сам.</p>" : "<p class='muted'>У этого звонка ещё нет аудиофайла.</p>"}</div>
         ${q ? `<p class="lead">${escapeHtml(q.summary)}</p>` : call.error_message ? `<p class="form-error">${escapeHtml(call.error_message)}</p>` : `<p class="muted">Оценка появится после обработки.</p>`}
         ${q ? `<h2>Рекомендации оператору</h2><ul class="recs">${(q.recommendations || []).map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>` : ""}
       </div>

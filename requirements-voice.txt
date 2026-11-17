@@ -1,0 +1,5 @@
+# Необязательно: озвучка демо-звонков (Silero TTS). Нужна только при DEMO_VOICE_ENABLED=true.
+# CPU-сборка torch, без CUDA (~200 МБ):
+#   python -m pip install -r requirements-voice.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.5

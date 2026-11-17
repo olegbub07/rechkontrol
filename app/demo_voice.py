@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -21,7 +22,6 @@ from app.models import Call
 
 log = logging.getLogger("rechkontrol.voice")
 
-MODEL_URL = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
 SAMPLE_RATE = 48000
 OUT_RATE = 16000
 _model = None
@@ -50,13 +50,13 @@ def _load_model():
     with _model_lock:
         if _model is not None:
             return _model
+        if not settings.demo_voice_enabled:
+            raise RuntimeError("Озвучка демо-звонков выключена (DEMO_VOICE_ENABLED=false)")
         path = _model_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists() or path.stat().st_size < 1_000_000:
-            import urllib.request
-
-            log.info("Скачиваю русскую модель голоса для прослушивания демо-звонков")
-            urllib.request.urlretrieve(MODEL_URL, path)
+            _download(path)
+        verify_model(path)
         import torch
 
         importer = torch.package.PackageImporter(_torch_path(path))
@@ -64,6 +64,41 @@ def _load_model():
         model.to(torch.device("cpu"))
         _model = model
         return model
+
+
+def file_sha256(path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_model(path) -> None:
+    """Модель Silero - это torch.package (pickle). Загружаем только файл с известным хешем."""
+    expected = (settings.demo_voice_model_sha256 or "").strip().lower()
+    if not expected:
+        raise RuntimeError("Не задан DEMO_VOICE_MODEL_SHA256: модель голоса не будет загружена без проверки")
+    actual = file_sha256(path)
+    if actual != expected:
+        raise RuntimeError(f"Хеш модели голоса не совпал: {actual}")
+
+
+def _download(path) -> None:
+    import urllib.request
+
+    url = settings.demo_voice_model_url
+    if not url.startswith("https://"):
+        raise RuntimeError("Модель голоса скачивается только по https")
+    log.info("Скачиваю русскую модель голоса для прослушивания демо-звонков")
+    tmp = path.with_suffix(".part")
+    try:
+        urllib.request.urlretrieve(url, tmp)
+        verify_model(tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def _resample(wav: np.ndarray, src_rate: int) -> np.ndarray:
@@ -161,6 +196,6 @@ def build_demo_voices() -> None:
 
 
 def start_demo_voices() -> None:
-    if os.environ.get("PYTEST_CURRENT_TEST"):
+    if not settings.demo_voice_enabled or os.environ.get("PYTEST_CURRENT_TEST"):
         return
     threading.Thread(target=build_demo_voices, name="demo-voice", daemon=True).start()
