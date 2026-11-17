@@ -11,6 +11,8 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 COPY run.py ./
+COPY scripts ./scripts
+COPY samples ./samples
 
 # Внутри контейнера слушаем все интерфейсы контейнера; наружу порт публикуется
 # только на 127.0.0.1 хоста (docker-compose.yml).
