@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     demo_voice_model_url: str = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
     # SHA-256 файла v4_ru.pt, снят 17.11.2026. Файл с другим хешем не загружается.
     demo_voice_model_sha256: str = "896ab96347d5bd781ab97959d4fd6885620e5aab52405d3445626eb7c1414b00"
+    # Стерео-записи: роли по громкости каналов (auto | left | right - канал оператора).
+    stereo_diarization: bool = True
+    stereo_operator_channel: str = "auto"
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0

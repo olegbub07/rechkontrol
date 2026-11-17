@@ -270,11 +270,102 @@ def assign_roles(turns: list[dict], operator_first: bool = True) -> list[dict]:
     return out
 
 
+STEREO_DOMINANCE = 1.6  # во сколько раз громче канал, чтобы считать фразу его
+STEREO_MIN_SHARE = 0.6  # доля фраз с явным каналом, иначе стерео считается ложным
+
+
+def _channel_of(stereo: np.ndarray, sr: int, start: float, end: float) -> int | None:
+    a = max(0, int(start * sr))
+    b = min(len(stereo), max(a + 1, int(end * sr)))
+    if b <= a:
+        return None
+    chunk = stereo[a:b]
+    e0 = float(np.sqrt(np.mean(chunk[:, 0] ** 2)) + 1e-9)
+    e1 = float(np.sqrt(np.mean(chunk[:, 1] ** 2)) + 1e-9)
+    if e0 >= e1 * STEREO_DOMINANCE:
+        return 0
+    if e1 >= e0 * STEREO_DOMINANCE:
+        return 1
+    return None
+
+
+def _group_words_by_channel(words: list[dict], stereo: np.ndarray, sr: int) -> list[dict]:
+    turns: list[dict] = []
+    current: list[dict] = []
+    current_ch: int | None = None
+    for word in words:
+        ch = _channel_of(stereo, sr, word["start"], word["end"])
+        if ch is None:
+            ch = current_ch
+        gap = word["start"] - current[-1]["end"] if current else 0.0
+        if current and (ch != current_ch or gap >= 1.5):
+            turns.append({"start": current[0]["start"], "end": current[-1]["end"], "text": _join_words(current), "channel": current_ch})
+            current = []
+        current.append(word)
+        current_ch = ch
+    if current:
+        turns.append({"start": current[0]["start"], "end": current[-1]["end"], "text": _join_words(current), "channel": current_ch})
+    return [t for t in turns if t["text"]]
+
+
+def roles_from_channels(
+    turns: list[dict],
+    stereo: np.ndarray | None,
+    sr: int,
+    operator_first: bool = True,
+    operator_channel: str = "auto",
+) -> list[dict] | None:
+    """Роли по громкости каналов: в записи КЦ оператор и клиент обычно в разных каналах.
+
+    Возвращает None, если запись не стерео или каналы почти одинаковые (моно, сведённое в два канала):
+    тогда работает обычная разметка по паузам и фразам.
+    """
+    if stereo is None or getattr(stereo, "ndim", 0) != 2 or stereo.shape[1] != 2 or not turns:
+        return None
+    for turn in turns:
+        if "channel" not in turn:
+            turn["channel"] = _channel_of(stereo, sr, turn["start"], turn["end"])
+    known = [t["channel"] for t in turns if t["channel"] is not None]
+    if len(known) < max(1, STEREO_MIN_SHARE * len(turns)) or len(set(known)) < 2:
+        return None
+    side = (operator_channel or "auto").lower()
+    if side in {"left", "0"}:
+        op_ch = 0
+    elif side in {"right", "1"}:
+        op_ch = 1
+    else:
+        cues = {0: 0, 1: 0}
+        for turn in turns:
+            if turn["channel"] is not None:
+                cues[turn["channel"]] += _cue_score(turn["text"], OPERATOR_CUES) - _cue_score(turn["text"], CLIENT_CUES)
+        if cues[0] != cues[1]:
+            op_ch = 0 if cues[0] > cues[1] else 1
+        else:
+            first = known[0]
+            op_ch = first if operator_first else 1 - first
+    out: list[dict] = []
+    prev_role = "operator" if operator_first else "client"
+    for turn in turns:
+        item = {k: v for k, v in turn.items() if k != "channel"}
+        if turn["channel"] is None:
+            role = prev_role
+        else:
+            role = "operator" if turn["channel"] == op_ch else "client"
+        item["role"] = role
+        item["speaker"] = "A" if role == "operator" else "B"
+        item["source"] = "stereo"
+        out.append(item)
+        prev_role = role
+    return merge_same_role(out, max_gap=1.0)
+
+
 def from_whisper(
     raw_segments: list[dict],
     operator_first: bool = True,
     audio: np.ndarray | None = None,
     sr: int | None = None,
+    stereo: np.ndarray | None = None,
+    operator_channel: str = "auto",
 ) -> list[dict]:
     words: list[dict] = []
     for seg in raw_segments or []:
@@ -290,6 +381,19 @@ def from_whisper(
                 words.append({"start": float(word["start"]), "end": float(word["end"]), "text": token})
             except (KeyError, TypeError, ValueError):
                 continue
+    if stereo is not None:
+        stereo_sr = 16000
+        if words:
+            by_channel = _group_words_by_channel(words, stereo, stereo_sr)
+        else:
+            by_channel = [
+                {"start": float(s["start"]), "end": float(s["end"]), "text": correct_asr_text(str(s.get("text") or ""))}
+                for s in raw_segments or []
+                if isinstance(s, dict) and str(s.get("text") or "").strip()
+            ]
+        result = roles_from_channels(by_channel, stereo, stereo_sr, operator_first, operator_channel)
+        if result:
+            return result
     regions = speech_regions(audio, sr) if audio is not None and sr else None
     if words:
         turns = utterances_from_words(words, regions)

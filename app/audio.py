@@ -112,3 +112,51 @@ def to_wav_mono_16k(src: Path, dst: Path, max_duration_sec: int | None = None) -
             raise AudioError("Запись слишком короткая.")
         raise AudioError(f"Длительность записи больше {limit // 60} минут.")
     return duration
+
+
+_CHANNELS_RE = re.compile(r"Audio:[^\n]*?(?:,\s*(\d+)\s+channels|,\s*(stereo|mono)\b)")
+
+
+def probe_channels(src: Path) -> int | None:
+    cmd = [_ffmpeg(), "-hide_banner", "-i", str(src)]
+    kwargs: dict = {"capture_output": True, "text": True, "timeout": 20}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(cmd, **kwargs)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = _CHANNELS_RE.search(proc.stderr or "")
+    if not match:
+        return None
+    if match.group(1):
+        return int(match.group(1))
+    return 2 if match.group(2) == "stereo" else 1
+
+
+def read_stereo_16k(src: Path, max_duration_sec: int | None = None):
+    """Два канала 16 кГц (float32, форма [n, 2]) для разметки по каналам. None, если запись не стерео."""
+    import numpy as np
+
+    if probe_channels(src) != 2:
+        return None
+    limit = max_duration_sec if max_duration_sec is not None else settings.max_duration_sec
+    cmd = [
+        _ffmpeg(), "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-t", str(int(limit) + 2), "-i", str(src), "-vn",
+        "-ac", "2", "-ar", "16000", "-f", "s16le", "-",
+    ]
+    kwargs: dict = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=300, **kwargs)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    pcm = np.frombuffer(proc.stdout, dtype="<i2")
+    if pcm.size < 4:
+        return None
+    pcm = pcm[: pcm.size - pcm.size % 2].reshape(-1, 2)
+    return pcm.astype(np.float32) / 32768.0

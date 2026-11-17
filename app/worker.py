@@ -7,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
-from app.audio import AudioError, to_wav_mono_16k
+from app.audio import AudioError, read_stereo_16k, to_wav_mono_16k
 from app.config import settings
 from app.crypto import decrypt_file
 from app.db import SessionLocal, write_lock
@@ -87,6 +87,7 @@ def process_call(call_id: int) -> None:
         decrypt_file(enc_path, tmp_src)
         on_progress(18)
         duration = to_wav_mono_16k(tmp_src, tmp_wav)
+        stereo = read_stereo_16k(tmp_src) if settings.stereo_diarization else None
         with write_lock, SessionLocal() as session:
             call = session.get(Call, call_id)
             if call is None or call.status != "processing":
@@ -98,8 +99,15 @@ def process_call(call_id: int) -> None:
             company = list(script["company_phrases"])
             extra = list(script["extra_script_phrases"])
         raw, lang, audio, sr = transcribe_wav(tmp_wav, duration=duration, progress=on_progress)
-        turns = from_whisper(raw, operator_first=operator_first, audio=audio, sr=sr)
-        del audio
+        turns = from_whisper(
+            raw,
+            operator_first=operator_first,
+            audio=audio,
+            sr=sr,
+            stereo=stereo,
+            operator_channel=settings.stereo_operator_channel,
+        )
+        del audio, stereo
         report = analyze(turns, company_phrases=company, extra_script_phrases=extra)
         full_text = " ".join(t["text"] for t in turns).strip()
         payload = report_to_json(report)
