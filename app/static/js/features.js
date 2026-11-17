@@ -180,3 +180,77 @@ function mountTurnLegend(call) {
     </div>`);
   $("#hl-on").onchange = (e) => box.classList.toggle("hl-off", !e.target.checked);
 }
+
+/* ---------- Сравнение операторов на дашборде ---------- */
+
+function sparkline(trend) {
+  const pts = (trend || []).filter((p) => p.overall != null);
+  if (!pts.length) return `<span class="muted">—</span>`;
+  const w = 120, h = 32, pad = 3;
+  const xs = (i) => pts.length === 1 ? w / 2 : pad + (i * (w - 2 * pad)) / (pts.length - 1);
+  const ys = (v) => h - pad - ((Math.max(0, Math.min(100, v))) / 100) * (h - 2 * pad);
+  const line = pts.map((p, i) => `${xs(i).toFixed(1)},${ys(p.overall).toFixed(1)}`).join(" ");
+  const tip = pts.map((p) => `неделя с ${fmtWeek(p.week)}: ${Number(p.overall).toFixed(0)} (${p.count} зв.)`).join("\n");
+  const last = pts[pts.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="Тренд по неделям">
+    <title>${escapeHtml(tip)}</title>
+    <line x1="0" x2="${w}" y1="${ys(80)}" y2="${ys(80)}" class="spark-goal" />
+    <polyline points="${line}" class="spark-line" fill="none" />
+    <circle cx="${xs(pts.length - 1)}" cy="${ys(last.overall)}" r="2.6" class="spark-dot" />
+  </svg>`;
+}
+
+function fmtWeek(iso) {
+  const [y, m, d] = String(iso).split("-");
+  return `${d}.${m}`;
+}
+
+function deltaBadge(d) {
+  if (d == null) return `<span class="muted" title="Нужны оценки минимум за две недели">—</span>`;
+  const cls = d > 0.4 ? "up" : d < -0.4 ? "down" : "flat";
+  const sign = d > 0 ? "+" : "";
+  return `<span class="delta ${cls}" title="Последняя неделя с оценками к предыдущей">${d > 0.4 ? "▲" : d < -0.4 ? "▼" : "■"} ${sign}${d.toFixed(1)}</span>`;
+}
+
+function mistakeChips(list) {
+  if (!list.length) return `<span class="muted">ошибок нет</span>`;
+  return list.map((m) => `<span class="mistake" title="Провален в ${m.calls} зв. из периода">${escapeHtml(m.title)} · ${m.share.toFixed(0)}%</span>`).join("");
+}
+
+async function mountOperatorCompare(view) {
+  const period = state.period === "7d" || state.period === "all" ? state.period : "30d";
+  let data;
+  try {
+    data = await api(`/operators/compare?period=${period}`);
+  } catch (ex) {
+    return;
+  }
+  const self = data.scope === "self";
+  const card = document.createElement("div");
+  card.className = "card mt op-compare";
+  const rows = data.operators.map((o) => `
+    <tr data-op="${o.id}">
+      ${self ? "" : `<td class="rank">${o.rank}</td>`}
+      <td><b>${escapeHtml(o.name)}</b>${o.external_id ? `<div class="muted">${escapeHtml(o.external_id)}</div>` : ""}</td>
+      <td>${o.calls_done}</td>
+      <td>${pill(o.overall)}</td>
+      <td>${deltaBadge(o.delta)}</td>
+      <td>${sparkline(o.trend)}</td>
+      <td>${o.violation_pct == null ? "—" : o.violation_pct.toFixed(0) + "%"}</td>
+      <td class="mistakes">${mistakeChips(o.top_mistakes)}</td>
+    </tr>`).join("");
+  const team = data.team;
+  card.innerHTML = `
+    <h2>${self ? "Моя динамика" : "Сравнение операторов"}</h2>
+    <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} Период как у дашборда.</p>
+    ${rows ? `<div class="table-scroll cmp-scroll"><table class="cmp-table">
+      <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th>Нарушения</th><th>Частые ошибки</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : `<p class="empty">Нет оценённых звонков с оператором за период</p>`}
+    ${team && team.top_mistakes.length ? `<h3 class="cmp-sub">Частые ошибки команды</h3>
+      <div class="cmp-team">${team.top_mistakes.map((m) => `
+        <div class="cmp-mistake"><span>${escapeHtml(m.title)}</span><progress class="meter" max="100" value="${m.share}"></progress><span class="muted">${m.calls} зв. · ${m.share.toFixed(0)}%</span></div>`).join("")}
+      </div>` : ""}`;
+  const cards = view.querySelectorAll(":scope > .card");
+  const last = cards[cards.length - 1];
+  if (last) view.insertBefore(card, last); else view.appendChild(card);
+}

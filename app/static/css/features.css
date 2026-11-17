@@ -24,3 +24,20 @@
 .hl-miss { display: inline-block; padding: 1px 8px; border: 1px dashed var(--bad); border-radius: 999px; color: var(--bad); font-size: 11px; cursor: help; background: rgba(156, 59, 50, 0.05); }
 .turns.hl-off .hl { background: none; box-shadow: none; color: inherit; font: inherit; padding: 0; }
 .turns.hl-off .hl-markers { display: none; }
+
+.cmp-scroll table.cmp-table { min-width: 900px; }
+.cmp-table td { vertical-align: middle; }
+.cmp-table td.rank { font-family: var(--serif); font-size: 18px; color: var(--gold); width: 36px; }
+.cmp-table td.mistakes { white-space: normal; min-width: 260px; }
+.mistake { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: rgba(156, 59, 50, 0.08); color: var(--bad); border: 1px solid rgba(156, 59, 50, 0.25); }
+.delta { font-weight: 600; font-size: 12px; white-space: nowrap; }
+.delta.up { color: var(--ok); }
+.delta.down { color: var(--bad); }
+.delta.flat { color: var(--muted); }
+.spark { display: block; }
+.spark-line { stroke: var(--leaf); stroke-width: 2; }
+.spark-goal { stroke: var(--gold); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.spark-dot { fill: var(--leaf); }
+.cmp-sub { font-family: var(--serif); font-size: 17px; margin: 20px 0 8px; }
+.cmp-team { display: grid; gap: 8px; }
+.cmp-mistake { display: grid; grid-template-columns: 220px minmax(120px, 1fr) 110px; gap: 12px; align-items: center; font-size: 13px; }

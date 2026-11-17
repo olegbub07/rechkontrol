@@ -56,6 +56,11 @@ Authorization: Bearer <token>
 | GET | `/settings` | модель, лимиты, фразы скрипта |
 | PUT | `/settings` | `{ "company_phrases", "extra_script_phrases" }` |
 | POST | `/analyze-text` | оценка текста без аудио |
+| GET | `/checklist` | чек-лист качества, значения по умолчанию, лимиты (admin, analyst) |
+| PUT | `/checklist` | `{ "criteria": [{ "id", "enabled", "title", "weight", "phrases" }], "category_weights" }`, только admin, 422 при ошибке проверки |
+| POST | `/checklist/reset` | вернуть встроенный чек-лист (admin) |
+| POST | `/checklist/rescore` | пересчитать оценки готовых звонков по сохранённой расшифровке (admin) |
+| GET | `/operators/compare?period=7d\|30d\|90d\|all` | рейтинг, тренд по неделям, частые ошибки; оператор получает только себя, `team` = null |
 
 ## Дашборд и экспорт
 

@@ -534,6 +534,7 @@ async function renderDashboard(view) {
   areaChart($("#trend"), data.trend, "overall", "#2d7a51");
   donut($("#donut"), data.tonality);
   bindRowLinks();
+  if (typeof mountOperatorCompare === "function") await mountOperatorCompare(view);
 }
 
 function operatorRank(ops) {
