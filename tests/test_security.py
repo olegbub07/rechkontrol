@@ -171,7 +171,10 @@ def test_db_rejects_attach_and_schema_rewrite():
     from sqlalchemy import text
     from sqlalchemy.exc import DatabaseError
 
-    from app.db import engine
+    from app.db import IS_SQLITE, engine
+
+    if not IS_SQLITE:
+        pytest.skip("защита ATTACH и writable_schema есть только у SQLite")
 
     with engine.connect() as conn:
         assert conn.execute(text("SELECT 1")).scalar() == 1
@@ -387,3 +390,17 @@ def test_whisper_model_setting_is_honored(monkeypatch, tmp_path):
     monkeypatch.setattr("app.transcribe.settings.whisper_model", str(custom))
     assert transcribe.local_model_dir() == custom
     assert not transcribe.local_model_ready()
+
+
+def test_database_url_choice(monkeypatch):
+    import pytest as _pytest
+
+    from app import db
+
+    monkeypatch.setattr("app.db.settings.database_url", "")
+    assert db.database_url().startswith("sqlite:///")
+    monkeypatch.setattr("app.db.settings.database_url", "postgresql://u:p@127.0.0.1:5432/x")
+    assert db.database_url() == "postgresql+psycopg://u:p@127.0.0.1:5432/x"
+    monkeypatch.setattr("app.db.settings.database_url", "mysql://u:p@h/x")
+    with _pytest.raises(RuntimeError):
+        db.database_url()

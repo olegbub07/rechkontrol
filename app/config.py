@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     trusted_proxies: str = ""
 
     data_dir: Path = DATA_DIR
+    # Пусто: SQLite в data/app.db. Например postgresql+psycopg://user:pass@127.0.0.1:5432/rechkontrol
+    database_url: str = ""
     whisper_model: str = "base"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"

@@ -57,6 +57,10 @@ python run.py
 
 Четыре метрики 0–100: вежливость, полнота ответа, соблюдение скрипта, решение проблемы. Итог — взвешенная сумма. Процент нарушений — доля непройденных пунктов чек-листа. Подробности — в [docs/QUALITY.md](docs/QUALITY.md).
 
+## PostgreSQL
+
+По умолчанию SQLite (`data/app.db`). PostgreSQL включается переменной `DATABASE_URL`, готовый `docker-compose.yml` с PostgreSQL 17 описан в [docs/RUN.md](docs/RUN.md#postgresql-вместо-sqlite-необязательно).
+
 ## Датасет
 
 **PolyAI MInDS-14 (ru-RU)** — банковские голосовые запросы с эталоном.

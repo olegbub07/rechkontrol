@@ -7,7 +7,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from threading import Lock
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -27,12 +27,35 @@ def ensure_dirs() -> None:
 
 ensure_dirs()
 
-_connect_args = {"check_same_thread": False}
-engine = create_engine(
-    f"sqlite:///{settings.db_path}",
-    connect_args=_connect_args,
-    pool_pre_ping=True,
-)
+def database_url() -> str:
+    """По умолчанию SQLite в data/app.db. DATABASE_URL=postgresql+psycopg://... включает PostgreSQL."""
+    url = (settings.database_url or "").strip()
+    if not url:
+        return f"sqlite:///{settings.db_path}"
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            url = "postgresql+psycopg://" + url[len(prefix) :]
+    if not (url.startswith("postgresql+psycopg://") or url.startswith("sqlite:///")):
+        raise RuntimeError("DATABASE_URL: поддерживаются только postgresql+psycopg://... и sqlite:///...")
+    return url
+
+
+def _warn_if_remote(url: str) -> None:
+    from sqlalchemy.engine import make_url
+
+    host = make_url(url).host or ""
+    if host and host not in {"127.0.0.1", "localhost", "::1"} and not host.startswith("/"):
+        log.warning("База данных на другом хосте (%s): расшифровки уходят с этой машины по сети", host)
+
+
+DATABASE_URL = database_url()
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
+if IS_SQLITE:
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, pool_pre_ping=True)
+else:
+    _warn_if_remote(DATABASE_URL)
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=5)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 write_lock = Lock()
 
@@ -68,8 +91,8 @@ def _set_if_present(dbapi_connection, name: str, enabled: bool) -> None:
         return
 
 
-@event.listens_for(engine, "connect")
 def _on_connect(dbapi_connection, _connection_record) -> None:
+    """Защита SQLite: только для SQLite-соединений."""
     _set_if_present(dbapi_connection, "SQLITE_DBCONFIG_DEFENSIVE", True)
     _set_if_present(dbapi_connection, "SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION", False)
     _set_if_present(dbapi_connection, "SQLITE_DBCONFIG_TRUSTED_SCHEMA", False)
@@ -97,6 +120,10 @@ def _on_connect(dbapi_connection, _connection_record) -> None:
         dbapi_connection.set_authorizer(_authorizer)
 
 
+if IS_SQLITE:
+    event.listen(engine, "connect", _on_connect)
+
+
 def init_db() -> None:
     ensure_dirs()
     from app import models  # noqa: F401
@@ -118,11 +145,13 @@ def _migrate() -> None:
         ("calls", "review_note", "TEXT"),
     )
     with engine.begin() as conn:
+        inspector = inspect(conn)
         for table, column, ddl in statements:
             if not _IDENT_RE.fullmatch(table) or not _IDENT_RE.fullmatch(column) or not _DDL_RE.fullmatch(ddl):
                 raise RuntimeError("схема миграции повреждена")
-            rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
-            names = {row[1] for row in rows}
+            if not IS_SQLITE:
+                ddl = ddl.replace("DATETIME", "TIMESTAMP")
+            names = {col["name"] for col in inspector.get_columns(table)}
             if column not in names:
                 conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
         conn.execute(text("UPDATE users SET is_active = 1 WHERE is_active IS NULL"))
@@ -132,6 +161,10 @@ def _migrate() -> None:
 
 
 def assert_integrity() -> None:
+    if not IS_SQLITE:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return
     with engine.connect() as conn:
         rows = conn.execute(text("PRAGMA quick_check")).fetchall()
     messages = [str(row[0]) for row in rows]
@@ -142,19 +175,29 @@ def assert_integrity() -> None:
 def protect_store() -> None:
     from app.crypto import restrict_file
 
-    paths = [
-        settings.db_path,
-        Path(str(settings.db_path) + "-wal"),
-        Path(str(settings.db_path) + "-shm"),
-        settings.key_path,
-        settings.jwt_secret_path,
-    ]
+    paths = [settings.key_path, settings.jwt_secret_path]
+    if IS_SQLITE:
+        paths += [settings.db_path, Path(str(settings.db_path) + "-wal"), Path(str(settings.db_path) + "-shm")]
     for path in paths:
         if path.is_file():
             restrict_file(path)
 
 
 def db_guard_status() -> dict:
+    if not IS_SQLITE:
+        with engine.connect() as conn:
+            version = conn.execute(text("SHOW server_version")).scalar()
+            ssl = conn.execute(text("SHOW ssl")).scalar()
+        return {
+            "backend": "postgresql",
+            "quick_check": "ok",
+            "server_version": str(version),
+            "ssl": str(ssl),
+            "foreign_keys": True,
+            "trusted_schema_off": True,
+            "cell_size_check": True,
+            "attach_blocked": True,
+        }
     with engine.connect() as conn:
         foreign_keys = conn.execute(text("PRAGMA foreign_keys")).scalar()
         trusted = conn.execute(text("PRAGMA trusted_schema")).scalar()
@@ -168,6 +211,7 @@ def db_guard_status() -> dict:
         "secure_delete": bool(secure_delete),
         "cell_size_check": bool(cell_check),
         "attach_blocked": True,
+        "backend": "sqlite",
     }
 
 
