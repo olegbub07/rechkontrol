@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import current_user, db_session
-from app.api.serializers import call_item
+from app.api.serializers import call_item, operator_out
 from app.models import Call, Operator, User
-from app.schemas import DashboardKpis, DashboardOut, OperatorOut, QueueOut, TrendPoint
+from app.schemas import DashboardKpis, DashboardOut, QueueOut, TrendPoint
+from app.transcribe import local_model_ready
 
 router = APIRouter(tags=["dashboard"])
 
@@ -29,6 +30,8 @@ def dashboard(
     session: Session = Depends(db_session),
     _: User = Depends(current_user),
 ) -> DashboardOut:
+    if period not in {"7d", "30d", "all"}:
+        period = "30d"
     start = _period_start(period)
     q = session.query(Call).options(joinedload(Call.quality), joinedload(Call.operator))
     if start:
@@ -79,24 +82,19 @@ def dashboard(
     for c in done:
         if c.operator_id:
             ops_map[c.operator_id].append(c)
-    operators_out: list[OperatorOut] = []
+    operators_out = []
     ops = {o.id: o for o in session.query(Operator).all()}
     for oid, group in ops_map.items():
         op = ops.get(oid)
         if not op:
             continue
-        operators_out.append(
-            OperatorOut(
-                id=op.id,
-                name=op.name,
-                external_id=op.external_id,
-                calls_count=len(group),
-                avg_overall=round(sum(c.quality.overall for c in group) / len(group), 1),
-                violation_pct=round(sum(c.quality.violation_pct for c in group) / len(group), 1),
-            )
-        )
+        operators_out.append(operator_out(op, group))
     operators_out.sort(key=lambda x: -(x.avg_overall or 0))
     recent = sorted(calls, key=lambda c: (c.call_at, c.id), reverse=True)[:8]
+    attention = sorted(
+        [c for c in done if c.quality.overall < 60 or c.quality.violation_pct >= 40],
+        key=lambda c: (c.quality.overall, -c.quality.violation_pct),
+    )[:6]
     today = datetime.utcnow().date()
     queue = QueueOut(
         queued=session.query(Call).filter(Call.status == "queued").count(),
@@ -105,11 +103,13 @@ def dashboard(
         failed=session.query(Call).filter(Call.status == "error").count(),
     )
     return DashboardOut(
+        offline=local_model_ready(),
         kpis=kpis,
         trend=trend,
         tonality=tonality,
         metrics_avg=metrics_avg,
         operators=operators_out,
         recent=[call_item(c) for c in recent],
+        attention=[call_item(c) for c in attention],
         queue=queue,
     )

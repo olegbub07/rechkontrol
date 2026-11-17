@@ -8,70 +8,77 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/static/css/app.css" />
 </head>
-<body>
+<body class="is-login">
   <div class="grain" aria-hidden="true"></div>
 
   <div id="login" class="gate">
     <section class="gate-left">
       <div class="gate-brand">
-        <svg viewBox="0 0 32 32" width="40" height="40" aria-hidden="true">
-          <rect width="32" height="32" rx="8" fill="#0c1f18"/>
-          <path d="M8 18c2-6 4.5-9 8-9s6 3 8 9" fill="none" stroke="#d4b56a" stroke-width="2"/>
-          <circle cx="16" cy="21" r="3" fill="#3d9a68"/>
-        </svg>
+        <img src="/static/favicon.svg" width="42" height="42" alt="" />
         <div>
           <div class="brand">РечьКонтроль</div>
           <div class="brand-sub">ПАО КБ «Центр-инвест»</div>
         </div>
       </div>
-      <blockquote>
-        Качество разговора — это актив банка. Расшифровка и оценка остаются внутри вашего контура.
-      </blockquote>
+      <div class="gate-hero">
+        <p class="eyebrow light">Кабинет качества контакт-центра</p>
+        <blockquote>Каждый разговор оставляет след. Мы читаем его здесь, не отдавая наружу ни секунды записи.</blockquote>
+      </div>
+      <svg class="wave" viewBox="0 0 560 80" aria-hidden="true">
+        <path d="M0 40 C40 12, 80 68, 120 40 S200 12, 240 40 S320 68, 360 40 S440 12, 480 40 S540 68, 560 40" fill="none" stroke="#d4b56a" stroke-width="1.4"/>
+        <path d="M0 40 C50 24, 90 56, 140 40 S230 24, 280 40 S370 56, 420 40 S510 24, 560 40" fill="none" stroke="#f3ddaa" stroke-width=".8" opacity=".55"/>
+      </svg>
       <ul class="gate-points">
-        <li>Whisper работает на этой машине</li>
+        <li>Расшифровка Whisper на этой машине</li>
         <li>Аудио шифруется на диске</li>
-        <li>Записи и текст наружу не уходят</li>
+        <li>Текст и записи не покидают контур</li>
       </ul>
     </section>
     <section class="gate-right">
-      <p class="eyebrow">Вход в кабинет качества</p>
-      <h1>Локальный контур контроля звонков</h1>
-      <form id="login-form" autocomplete="on">
-        <label>Логин<input name="username" autocomplete="username" required maxlength="64" /></label>
+      <form id="login-form" class="gate-card" autocomplete="on">
+        <p class="eyebrow">Вход в кабинет</p>
+        <h1>Контроль звонков на этой машине</h1>
+        <p class="lead">Для руководителя контакт-центра и службы качества. Запись и текст остаются здесь.</p>
+        <div class="cred" id="cred-box">
+          <div class="cred-kicker">Стартовый вход</div>
+          <div class="cred-row"><span>Логин</span><b id="cred-user">admin</b></div>
+          <div class="cred-row"><span>Пароль</span><b id="cred-pass">CenterInvest2026!</b></div>
+          <button type="button" class="btn row" id="cred-fill">Подставить в форму</button>
+          <p class="hint">Это пароль из инструкции. После входа его нужно сменить.</p>
+        </div>
+        <label>Логин<input name="username" value="admin" autocomplete="username" required maxlength="64" spellcheck="false" /></label>
         <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128" /></label>
-        <button type="submit" class="btn primary">Войти в кабинет</button>
+        <button type="submit" class="btn primary" id="login-submit">Войти в кабинет</button>
         <p class="form-error" id="login-error" hidden></p>
+        <p class="hint" id="login-status">Проверяю, отвечает ли программа…</p>
       </form>
-      <p class="hint">Учётная запись задаётся в <code>.env</code> на этой машине.</p>
     </section>
   </div>
 
   <div id="shell" class="shell" hidden>
-    <aside class="side">
+    <aside class="side" id="side">
       <div class="side-brand">
-        <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
-          <rect width="32" height="32" rx="8" fill="#12261c"/>
-          <path d="M8 18c2-6 4.5-9 8-9s6 3 8 9" fill="none" stroke="#d4b56a" stroke-width="2"/>
-          <circle cx="16" cy="21" r="3" fill="#3d9a68"/>
-        </svg>
+        <img src="/static/favicon.svg" width="36" height="36" alt="" />
         <div>
           <strong>РечьКонтроль</strong>
           <span>локальный контур</span>
         </div>
       </div>
       <nav class="nav">
-        <a href="#/" data-nav="dashboard"><em>01</em> Обзор</a>
-        <a href="#/calls" data-nav="calls"><em>02</em> Звонки</a>
-        <a href="#/upload" data-nav="upload"><em>03</em> Загрузить</a>
-        <a href="#/operators" data-nav="operators"><em>04</em> Операторы</a>
-        <a href="#/export" data-nav="export"><em>05</em> Экспорт</a>
-        <a href="#/settings" data-nav="settings"><em>06</em> Скрипт</a>
+        <a href="#/" data-nav="dashboard"><em>01</em><span>Обзор</span></a>
+        <a href="#/calls" data-nav="calls"><em>02</em><span>Звонки</span></a>
+        <a href="#/upload" data-nav="upload"><em>03</em><span>Загрузить</span></a>
+        <a href="#/operators" data-nav="operators"><em>04</em><span>Операторы</span></a>
+        <a href="#/export" data-nav="export"><em>05</em><span>Экспорт</span></a>
+        <a href="#/dataset" data-nav="dataset"><em>06</em><span>Датасет</span></a>
+        <a href="#/settings" data-nav="settings"><em>07</em><span>Скрипт</span></a>
+        <a href="#/admin" data-nav="admin" id="nav-admin" hidden><em>08</em><span>Админка</span></a>
       </nav>
       <div class="side-lock">
         <span class="dot"></span>
         <div>
           <b>Контур закрыт</b>
-          <span>аудио и текст не покидают машину</span>
+          <span>аудио и текст остаются на машине</span>
         </div>
       </div>
     </aside>
@@ -83,17 +90,35 @@
           <p id="page-sub" class="muted">Контроль качества коммуникаций контакт-центра</p>
         </div>
         <div class="top-right">
-          <div id="queue-chip" class="chip" title="Очередь обработки">очередь пуста</div>
+          <button id="nav-toggle" class="btn ghost nav-toggle" type="button" aria-expanded="false" aria-controls="side">Меню</button>
+          <button id="queue-chip" class="chip" type="button" title="Открыть журнал и очередь">очередь пуста</button>
           <div class="who">
-            <span id="who-name">admin</span>
+            <span class="avatar" id="who-av">•</span>
+            <span id="who-name"></span>
+            <button id="account" class="btn ghost" type="button">Пароль</button>
             <button id="logout" class="btn ghost" type="button">Выйти</button>
           </div>
         </div>
       </header>
+      <div id="banner" class="banner" hidden></div>
       <div id="view" class="view"></div>
     </div>
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <dialog id="account-dialog" class="modal">
+    <form id="pwd-self">
+      <p class="eyebrow">Учётная запись</p>
+      <h2>Сменить пароль</h2>
+      <p class="muted">После сохранения старые сессии этого пользователя закрываются.</p>
+      <label>Текущий пароль <input name="old_password" type="password" required autocomplete="current-password" /></label>
+      <label>Новый пароль <input name="new_password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" /></label>
+      <p class="hint">От 10 символов, буква, цифра и символ. Не используйте пароль из инструкции.</p>
+      <div class="toolbar">
+        <button class="btn primary row" type="submit">Сохранить</button>
+        <button class="btn ghost row" id="pwd-cancel" type="button">Закрыть</button>
+      </div>
+    </form>
+  </dialog>
   <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -11,8 +11,32 @@ class LoginIn(BaseModel):
 
 
 class UserOut(BaseModel):
+    id: int | None = None
     username: str
     role: str
+    is_active: bool = True
+    last_login_at: datetime | None = None
+    must_change_password: bool = False
+
+
+class PasswordChangeIn(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+class AdminUserIn(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=10, max_length=128)
+    role: str = "analyst"
+
+
+class AdminUserPatch(BaseModel):
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class AdminPasswordIn(BaseModel):
+    password: str = Field(min_length=10, max_length=128)
 
 
 class TokenOut(BaseModel):
@@ -40,6 +64,10 @@ class OperatorOut(BaseModel):
     calls_count: int = 0
     avg_overall: float | None = None
     violation_pct: float | None = None
+    avg_politeness: float | None = None
+    avg_completeness: float | None = None
+    avg_script: float | None = None
+    avg_resolution: float | None = None
 
 
 class CallListItem(BaseModel):
@@ -52,6 +80,7 @@ class CallListItem(BaseModel):
     duration_sec: float | None
     operator_id: int | None
     operator_name: str | None
+    operator_external_id: str | None = None
     overall: float | None = None
     politeness: float | None = None
     completeness: float | None = None
@@ -62,6 +91,7 @@ class CallListItem(BaseModel):
     avg_response_sec: float | None = None
     is_demo: bool = False
     error_message: str | None = None
+    flagged: bool = False
 
 
 class SegmentOut(BaseModel):
@@ -108,6 +138,7 @@ class CallDetail(CallListItem):
     full_text: str = ""
     segments: list[SegmentOut] = Field(default_factory=list)
     quality: QualityOut | None = None
+    review_note: str = ""
 
 
 class DashboardKpis(BaseModel):
@@ -135,12 +166,14 @@ class QueueOut(BaseModel):
 
 
 class DashboardOut(BaseModel):
+    offline: bool = False
     kpis: DashboardKpis
     trend: list[TrendPoint]
     tonality: dict[str, int]
     metrics_avg: dict[str, float]
     operators: list[OperatorOut]
     recent: list[CallListItem]
+    attention: list[CallListItem] = Field(default_factory=list)
     queue: QueueOut
 
 
@@ -153,11 +186,18 @@ class SettingsOut(BaseModel):
     local_offline: bool
     company_phrases: list[str]
     extra_script_phrases: list[str]
+    whisper_beam_size: int = 5
+    whisper_batch_size: int = 8
 
 
 class SettingsIn(BaseModel):
     company_phrases: list[str] | None = None
     extra_script_phrases: list[str] | None = None
+
+
+class CallPatch(BaseModel):
+    review_note: str | None = Field(default=None, max_length=2000)
+    flagged: bool | None = None
 
 
 class AnalyzeTextIn(BaseModel):

@@ -3,7 +3,50 @@ from __future__ import annotations
 import json
 
 from app.models import Call
-from app.schemas import CallDetail, CallListItem, CheckOut, QualityOut, SegmentOut
+from app.schemas import CallDetail, CallListItem, CheckOut, OperatorOut, QualityOut, SegmentOut
+
+
+def operator_scores(calls: list) -> dict:
+    done = [c for c in calls if getattr(c, "quality", None)]
+    if not done:
+        return {
+            "calls_count": len(calls),
+            "avg_overall": None,
+            "violation_pct": None,
+            "avg_politeness": None,
+            "avg_completeness": None,
+            "avg_script": None,
+            "avg_resolution": None,
+        }
+
+    def avg(key: str) -> float:
+        return round(sum(getattr(c.quality, key) for c in done) / len(done), 1)
+
+    return {
+        "calls_count": len(calls),
+        "avg_overall": avg("overall"),
+        "violation_pct": avg("violation_pct"),
+        "avg_politeness": avg("politeness"),
+        "avg_completeness": avg("completeness"),
+        "avg_script": avg("script_compliance"),
+        "avg_resolution": avg("resolution"),
+    }
+
+
+def operator_out(op, calls: list) -> OperatorOut:
+    scores = operator_scores(calls)
+    return OperatorOut(
+        id=op.id,
+        name=op.name,
+        external_id=op.external_id,
+        calls_count=scores["calls_count"],
+        avg_overall=scores["avg_overall"],
+        violation_pct=scores["violation_pct"],
+        avg_politeness=scores["avg_politeness"],
+        avg_completeness=scores["avg_completeness"],
+        avg_script=scores["avg_script"],
+        avg_resolution=scores["avg_resolution"],
+    )
 
 
 def call_item(call: Call) -> CallListItem:
@@ -19,6 +62,7 @@ def call_item(call: Call) -> CallListItem:
         duration_sec=call.duration_sec,
         operator_id=call.operator_id,
         operator_name=op.name if op else None,
+        operator_external_id=op.external_id if op else None,
         overall=q.overall if q else None,
         politeness=q.politeness if q else None,
         completeness=q.completeness if q else None,
@@ -29,27 +73,71 @@ def call_item(call: Call) -> CallListItem:
         avg_response_sec=q.avg_response_sec if q else None,
         is_demo=bool(call.is_demo),
         error_message=call.error_message,
+        flagged=bool(call.flagged),
     )
+
+
+def _json_list(raw: str | None) -> list:
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _segments(raw: list) -> list[SegmentOut]:
+    segments: list[SegmentOut] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            segments.append(
+                SegmentOut(
+                    start=float(item.get("start") or 0),
+                    end=float(item.get("end") or 0),
+                    speaker=str(item.get("speaker") or ""),
+                    role=str(item.get("role") or "client"),
+                    text=str(item.get("text") or ""),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return segments
+
+
+def _checks(raw: list) -> list[CheckOut]:
+    checks: list[CheckOut] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            checks.append(
+                CheckOut(
+                    id=str(item.get("id") or "check"),
+                    title=str(item.get("title") or "Проверка"),
+                    category=str(item.get("category") or ""),
+                    passed=bool(item.get("passed")),
+                    score=float(item.get("score") or 0),
+                    weight=float(item.get("weight") or 0),
+                    detail=str(item.get("detail") or ""),
+                    evidence=None if item.get("evidence") is None else str(item.get("evidence")),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return checks
 
 
 def call_detail(call: Call) -> CallDetail:
     base = call_item(call)
-    segments: list[SegmentOut] = []
     full_text = ""
+    segments: list[SegmentOut] = []
     if call.transcript:
         full_text = call.transcript.full_text
-        try:
-            raw = json.loads(call.transcript.segments_json or "[]")
-        except json.JSONDecodeError:
-            raw = []
-        segments = [SegmentOut(**s) for s in raw]
+        segments = _segments(_json_list(call.transcript.segments_json))
     quality = None
     if call.quality:
         q = call.quality
-        try:
-            checks_raw = json.loads(q.checks_json or "[]")
-        except json.JSONDecodeError:
-            checks_raw = []
         quality = QualityOut(
             politeness=q.politeness,
             completeness=q.completeness,
@@ -61,9 +149,9 @@ def call_detail(call: Call) -> CallDetail:
             avg_response_sec=q.avg_response_sec,
             talk_ratio_operator=q.talk_ratio_operator,
             violation_pct=q.violation_pct,
-            violations=json.loads(q.violations_json or "[]"),
-            recommendations=json.loads(q.recommendations_json or "[]"),
-            checks=[CheckOut(**c) for c in checks_raw],
+            violations=[item for item in _json_list(q.violations_json) if isinstance(item, dict)],
+            recommendations=[str(item) for item in _json_list(q.recommendations_json)],
+            checks=_checks(_json_list(q.checks_json)),
             summary=q.summary,
         )
     return CallDetail(
@@ -75,4 +163,5 @@ def call_detail(call: Call) -> CallDetail:
         full_text=full_text,
         segments=segments,
         quality=quality,
+        review_note=call.review_note or "",
     )

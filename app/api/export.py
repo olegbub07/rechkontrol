@@ -5,11 +5,12 @@ import io
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import current_user, db_session
+from app.audit import write_audit
 from app.api.serializers import call_detail
 from app.models import Call, User
 
@@ -54,7 +55,21 @@ def _rows(session: Session, operator_id: int | None, date_from: str | None, date
         q = q.filter(Call.call_at >= start)
     if end:
         q = q.filter(Call.call_at <= end)
-    return q.order_by(Call.call_at.desc()).all()
+    return q.order_by(Call.call_at.desc()).limit(5000).all()
+
+
+def csv_cell(value):
+    """Числа остаются числами. Текст, похожий на формулу Excel, не исполняется."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    if text[:1] in {"=", "+", "-", "@", "\t", "\r"}:
+        return "'" + text
+    return text
 
 
 def _flat(call: Call) -> dict:
@@ -81,19 +96,22 @@ def _flat(call: Call) -> dict:
 
 @router.get("/export/csv")
 def export_csv(
+    request: Request,
     operator_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     session: Session = Depends(db_session),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ):
     calls = _rows(session, operator_id, date_from, date_to)
+    write_audit(session, "export.csv", user=user, detail=str(len(calls)), request=request)
+    session.commit()
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([title for _, title in CSV_COLUMNS])
     for call in calls:
         row = _flat(call)
-        writer.writerow([row[key] for key, _ in CSV_COLUMNS])
+        writer.writerow([csv_cell(row[key]) for key, _ in CSV_COLUMNS])
     payload = buf.getvalue().encode("utf-8-sig")
     headers = {
         "Content-Disposition": 'attachment; filename="kpi_calls.csv"',
@@ -104,14 +122,19 @@ def export_csv(
 
 @router.get("/export/json")
 def export_json(
+    request: Request,
     operator_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     full: bool = Query(False),
     session: Session = Depends(db_session),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ):
+    if full and user.role != "admin":
+        raise HTTPException(403, "Полный экспорт с расшифровками доступен администратору")
     calls = _rows(session, operator_id, date_from, date_to)
+    write_audit(session, "export.json", user=user, detail=f"{len(calls)} full={int(full)}", request=request)
+    session.commit()
     if full:
         data = [json.loads(call_detail(c).model_dump_json()) for c in calls]
     else:
