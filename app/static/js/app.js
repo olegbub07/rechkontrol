@@ -1,7 +1,8 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false };
+const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false, gateAccounts: [] };
+const OPERATOR_BLOCKED = ["upload", "operators", "export", "dataset", "settings", "admin"];
 
 function token() {
   return sessionStorage.getItem("rk_token");
@@ -69,26 +70,39 @@ function showLogin() {
   $("#login").hidden = false;
   $("#shell").hidden = true;
   document.body.classList.add("is-login");
-  document.body.classList.remove("is-app");
+  document.body.classList.remove("is-app", "role-operator", "role-admin");
   refreshGate();
+}
+
+function fillLogin(account) {
+  const form = $("#login-form");
+  if (!form || !account) return;
+  form.username.value = account.username || "";
+  form.password.value = account.password || "";
+  form.password.focus();
 }
 
 async function refreshGate() {
   const status = $("#login-status");
   const box = $("#cred-box");
+  const list = $("#cred-list");
   if (!status || $("#login").hidden) return;
   try {
     const res = await fetch("/api/auth/bootstrap", { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error("down");
     const data = await res.json();
-    if (data.show_password && data.password) {
-      if (box) box.hidden = false;
-      const user = $("#cred-user");
-      const pass = $("#cred-pass");
-      if (user) user.textContent = data.username || "admin";
-      if (pass) pass.textContent = data.password;
-      const field = $("#login-form [name=username]");
-      if (field && !field.value) field.value = data.username || "admin";
+    const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+    state.gateAccounts = accounts;
+    if (data.show_password && accounts.length && box && list) {
+      box.hidden = false;
+      list.innerHTML = accounts.map((account, index) => `
+        <button type="button" class="cred-account" data-i="${index}">
+          <b>${escapeHtml(account.title || account.username)}</b>
+          <span>${escapeHtml(account.username)} · ${escapeHtml(account.hint || "")}</span>
+        </button>`).join("");
+      $$(".cred-account", list).forEach((button) => {
+        button.onclick = () => fillLogin(state.gateAccounts[Number(button.dataset.i)]);
+      });
     } else if (box) {
       box.hidden = true;
     }
@@ -133,16 +147,36 @@ function showBanner() {
   }
 }
 
+function roleLabel(role) {
+  if (role === "admin") return "администратор";
+  if (role === "operator") return "оператор";
+  return "аналитик";
+}
+
+function applyRoleNav() {
+  const role = state.user?.role || "";
+  document.body.classList.toggle("role-operator", role === "operator");
+  document.body.classList.toggle("role-admin", role === "admin");
+  $$(".nav a").forEach((link) => {
+    const name = link.dataset.nav;
+    if (role === "operator") link.hidden = name !== "dashboard" && name !== "calls";
+    else if (name === "admin") link.hidden = role !== "admin";
+    else link.hidden = false;
+  });
+  const side = $("#side-role");
+  if (side) side.textContent = role === "operator" ? "кабинет оператора" : role === "admin" ? "кабинет администратора" : "локальный контур";
+}
+
 function showShell() {
   $("#login").hidden = true;
   $("#shell").hidden = false;
   document.body.classList.remove("is-login");
   document.body.classList.add("is-app");
   const name = state.user?.username || "";
-  $("#who-name").textContent = name;
+  const role = state.user?.role || "";
+  $("#who-name").textContent = name ? `${name} · ${roleLabel(role)}` : "";
   $("#who-av").textContent = initials(name || "•");
-  const adminLink = $("#nav-admin");
-  if (adminLink) adminLink.hidden = state.user?.role !== "admin";
+  applyRoleNav();
   showBanner();
   if (state.user?.must_change_password && !state.passwordNudge) {
     state.passwordNudge = true;
@@ -251,6 +285,7 @@ async function route() {
   setLive(null);
   state.callsToken = null;
   state.callToken = null;
+  state.audioToken = null;
   closeNav();
   if (!token()) { showLogin(); return; }
   if (!state.user) {
@@ -259,6 +294,10 @@ async function route() {
   }
   showShell();
   const parts = hashParts();
+  if (state.user?.role === "operator" && OPERATOR_BLOCKED.includes(parts[0])) {
+    location.hash = "#/";
+    return;
+  }
   const view = $("#view");
   view.innerHTML = `<div class="card"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
   try {
@@ -332,7 +371,13 @@ function donut(el, parts) {
 }
 
 async function renderDashboard(view) {
-  setNav("dashboard", "Обзор смены", "Четыре метрики качества, тренд и очередь обработки", "Дашборд");
+  const mine = state.user?.role === "operator";
+  setNav(
+    "dashboard",
+    mine ? "Мои разговоры" : "Обзор смены",
+    mine ? "Оценки только по вашим звонкам. Админки в этом кабинете нет." : "Четыре метрики качества, тренд и очередь обработки",
+    mine ? "Кабинет оператора" : "Дашборд",
+  );
   const data = await api(`/dashboard?period=${state.period}`);
   const k = data.kpis;
   const sla = k.processed_sec == null ? "—" : `${(k.processed_sec / 60).toFixed(1)} мин`;
@@ -356,7 +401,7 @@ async function renderDashboard(view) {
         ${scoreGauge(data.metrics_avg.resolution, "Решение")}
       </div>
     </div>
-    <div class="card mt">
+    ${mine ? "" : `<div class="card mt">
       <h2>Требования кейса</h2>
       <ul class="case-list">
         <li>Расшифровка Whisper на этой машине${data.offline ? " · модель уже на диске, сеть для звонков не нужна" : " · модель скачается один раз, сами записи наружу не уходят"}</li>
@@ -365,7 +410,7 @@ async function renderDashboard(view) {
         <li>KPI в CSV и JSON: процент нарушений, время ответа, тональность, дата и время, идентификатор оператора</li>
         <li>Звонок до 10 минут обрабатывается за 3–5 минут. Сейчас в работе ${data.queue.processing}, ждут ${data.queue.queued}</li>
       </ul>
-    </div>
+    </div>`}
     <div class="grid kpis mt">
       <div class="card kpi"><div class="label">Нарушения</div><div class="value ${scoreClass(100 - k.violation_pct)}">${k.violation_pct.toFixed(0)}%</div><div class="hint">доля непройденных проверок</div></div>
       <div class="card kpi"><div class="label">Время ответа</div><div class="value">${k.avg_response_sec == null ? "—" : k.avg_response_sec.toFixed(1)}</div><div class="hint">секунды после реплики клиента</div></div>
@@ -384,7 +429,7 @@ async function renderDashboard(view) {
         <p class="muted">Whisper и оценка качества выполняются на этой машине. Аудио на диске зашифровано.</p>
       </div>
       <div class="card">
-        <h2>Рейтинг операторов</h2>
+        <h2>${mine ? "Моя оценка" : "Рейтинг операторов"}</h2>
         ${operatorRank(data.operators)}
       </div>
     </div>
@@ -397,7 +442,7 @@ async function renderDashboard(view) {
         </div>`).join("")}</div>
     </div>` : ""}
     <div class="card mt">
-      <h2>Последние звонки</h2>
+      <h2>${mine ? "Мои последние звонки" : "Последние звонки"}</h2>
       ${callsMini(data.recent)}
     </div>`;
   $$("#period button").forEach((b) => {
@@ -538,16 +583,22 @@ function bindRowLinks() {
 }
 
 async function renderCall(view, id) {
-  setNav("calls", "Досье звонка", "Плеер, поиск по репликам, чек-лист и заметка рецензента", "Разбор");
+  const reviewer = state.user?.role !== "operator";
+  setNav(
+    "calls",
+    "Досье звонка",
+    reviewer ? "Прослушивание, поиск по репликам, чек-лист и заметка рецензента" : "Прослушивание и оценка вашего разговора",
+    "Разбор",
+  );
   const call = await api(`/calls/${id}`);
   const q = call.quality;
   const live = call.status === "queued" || call.status === "processing";
   view.innerHTML = `
     <div class="toolbar">
       <a class="btn ghost" href="#/calls">← к журналу</a>
-      <button class="btn ghost" id="flag" type="button">${call.flagged ? "Снять пометку" : "Пометить"}</button>
+      ${reviewer ? `<button class="btn ghost" id="flag" type="button">${call.flagged ? "Снять пометку" : "Пометить"}</button>` : ""}
       <button class="btn ghost" id="copy-text" type="button">Копировать текст</button>
-      ${call.has_audio ? `<button class="btn" id="reprocess" type="button">Повторить обработку</button>` : ""}
+      ${reviewer && call.has_audio ? `<button class="btn" id="reprocess" type="button">Повторить обработку</button>` : ""}
       ${state.user?.role === "admin" ? `<button class="btn danger" id="del" type="button">Удалить</button>` : ""}
     </div>
     <div class="dossier">
@@ -556,7 +607,8 @@ async function renderCall(view, id) {
         <h2>${escapeHtml(call.orig_filename)}</h2>
         <p class="muted" id="live-label"></p>
         ${live ? `<div class="progress" id="live-bar"><span id="live-progress" style="width:${call.progress || 4}%"></span></div>` : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
-        <div id="player-box">${call.has_audio ? "<p class='muted'>Загрузка записи…</p>" : "<p class='muted'>Демо-звонок без аудиофайла. Реальные записи появляются после загрузки WAV, MP3 или OGG.</p>"}</div>
+        <h3 class="player-title">Прослушивание</h3>
+        <div id="player-box">${call.has_audio ? "<p class='muted'>Загрузка записи…</p>" : call.is_demo ? "<p class='muted'>Запись готовится на этой машине. Плеер появится сам.</p>" : "<p class='muted'>У этого звонка ещё нет аудиофайла.</p>"}</div>
         ${q ? `<p class="lead">${escapeHtml(q.summary)}</p>` : call.error_message ? `<p class="form-error">${escapeHtml(call.error_message)}</p>` : `<p class="muted">Оценка появится после обработки.</p>`}
         ${q ? `<h2>Рекомендации оператору</h2><ul class="recs">${(q.recommendations || []).map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>` : ""}
       </div>
@@ -597,10 +649,10 @@ async function renderCall(view, id) {
             </div>`).join("") : "<p class='muted'>Чек-лист недоступен</p>"}
         </div>
         <h2 class="mt">Заметка рецензента</h2>
-        <form id="note-form">
+        ${reviewer ? `<form id="note-form">
           <textarea class="note-box" id="note" maxlength="2000" placeholder="Что разобрать на планёрке">${escapeHtml(call.review_note || "")}</textarea>
           <button class="btn row mt" type="submit">Сохранить заметку</button>
-        </form>
+        </form>` : `<p class="muted">${escapeHtml(call.review_note || "Заметку ставит руководитель.")}</p>`}
       </div>
     </div>`;
   const paintTurns = (query) => {
@@ -642,17 +694,47 @@ async function renderCall(view, id) {
       });
     };
   };
-  if (call.has_audio) {
+  const audioToken = {};
+  state.audioToken = audioToken;
+  const mountPlayer = async () => {
+    const box = $("#player-box");
+    if (!box || state.audioToken !== audioToken) return false;
     try {
-      if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
       const res = await api(`/calls/${id}/audio`, { raw: true });
       const blob = await res.blob();
+      if (state.audioToken !== audioToken || !$("#player-box")) return false;
+      if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
       state.audioUrl = URL.createObjectURL(blob);
       $("#player-box").innerHTML = `<div class="player-wrap"><audio class="player" controls src="${state.audioUrl}"></audio></div>`;
       bindAudio();
+      return true;
     } catch {
-      $("#player-box").innerHTML = `<p class="muted">Не удалось открыть запись.</p>`;
+      return false;
     }
+  };
+  if (call.has_audio) {
+    const opened = await mountPlayer();
+    if (!opened && $("#player-box")) $("#player-box").innerHTML = `<p class="muted">Не удалось открыть запись.</p>`;
+  } else if (call.is_demo) {
+    let tries = 0;
+    const wait = setInterval(async () => {
+      tries += 1;
+      if (state.audioToken !== audioToken || !$("#player-box") || tries > 90) {
+        clearInterval(wait);
+        return;
+      }
+      try {
+        const fresh = await api(`/calls/${id}`);
+        if (!fresh.has_audio || state.audioToken !== audioToken) return;
+        clearInterval(wait);
+        call.segments = fresh.segments || call.segments;
+        call.has_audio = true;
+        const opened = await mountPlayer();
+        if (opened) paintTurns($("#turn-q") ? $("#turn-q").value : "");
+      } catch {
+        /* следующий тик повторит запрос */
+      }
+    }, 4000);
   }
   $("#copy-text").onclick = async () => {
     const text = call.full_text || (call.segments || []).map((s) => s.text).join("\n");
@@ -663,7 +745,8 @@ async function renderCall(view, id) {
       toast("Не удалось скопировать", true);
     }
   };
-  $("#flag").onclick = async () => {
+  const flag = $("#flag");
+  if (flag) flag.onclick = async () => {
     const next = !call.flagged;
     try {
       await api(`/calls/${id}`, { method: "PATCH", json: { flagged: next } });
@@ -674,7 +757,8 @@ async function renderCall(view, id) {
       toast(err.message, true);
     }
   };
-  $("#note-form").onsubmit = async (e) => {
+  const noteForm = $("#note-form");
+  if (noteForm) noteForm.onsubmit = async (e) => {
     e.preventDefault();
     try {
       await api(`/calls/${id}`, { method: "PATCH", json: { review_note: $("#note").value } });
@@ -1074,17 +1158,21 @@ function postureItems(posture) {
   ].map(([kind, title, text]) => `<li class="${kind === "ok" ? "" : "bad"}"><div><b>${title}</b><span>${text}</span></div></li>`).join("");
 }
 
-function userRows(users) {
+function userRows(users, operators) {
+  const names = Object.fromEntries((operators || []).map((op) => [String(op.id), op.name]));
   return users.map((u) => {
     const self = u.id === state.user.id;
-    const role = u.role === "admin" ? "admin" : "analyst";
+    const role = ["admin", "analyst", "operator"].includes(u.role) ? u.role : "analyst";
+    const linked = u.operator_id ? names[String(u.operator_id)] : "";
     return `<tr>
       <td>
         <b>${escapeHtml(u.username)}</b>
+        ${linked ? `<div class="muted">${escapeHtml(linked)}</div>` : ""}
         ${u.must_change_password ? `<div><span class="badge warn">смените пароль</span></div>` : ""}
       </td>
       <td>
-        <select class="role-select js-role" data-id="${u.id}" data-current="${role}" ${self ? "" : ""}>
+        <select class="role-select js-role" data-id="${u.id}" data-current="${role}" data-operator="${u.operator_id || ""}">
+          <option value="operator" ${role === "operator" ? "selected" : ""}>оператор</option>
           <option value="analyst" ${role === "analyst" ? "selected" : ""}>аналитик</option>
           <option value="admin" ${role === "admin" ? "selected" : ""}>администратор</option>
         </select>
@@ -1110,12 +1198,14 @@ async function renderAdmin(view) {
   let users;
   let audit;
   let posture;
+  let operators = [];
   try {
-    [overview, users, audit, posture] = await Promise.all([
+    [overview, users, audit, posture, operators] = await Promise.all([
       api("/admin/overview"),
       api("/admin/users"),
       api("/admin/audit?page_size=40"),
       api("/admin/posture"),
+      api("/operators"),
     ]);
   } catch (err) {
     view.innerHTML = `<div class="card featured"><h2>Админка недоступна</h2><p>${escapeHtml(err.message)}</p></div>`;
@@ -1146,9 +1236,16 @@ async function renderAdmin(view) {
             <li data-rule="symbol">есть символ</li>
           </ul>
           <label>Роль
-            <select name="role">
-              <option value="analyst">аналитик — кабинет без управления людьми</option>
-              <option value="admin">администратор — пользователи и журнал</option>
+            <select name="role" id="new-role">
+              <option value="operator">оператор — только свои звонки, без админки</option>
+              <option value="analyst" selected>аналитик — кабинет без управления людьми</option>
+              <option value="admin">администратор — пользователи, журнал и все звонки</option>
+            </select>
+          </label>
+          <label id="new-operator-label" hidden>Карточка сотрудника
+            <select name="operator_id">
+              <option value="">выберите оператора</option>
+              ${operators.map((op) => `<option value="${op.id}">${escapeHtml(op.name)}${op.external_id ? " · " + escapeHtml(op.external_id) : ""}</option>`).join("")}
             </select>
           </label>
           <button class="btn primary row" type="submit">Создать учётную запись</button>
@@ -1157,10 +1254,10 @@ async function renderAdmin(view) {
     </div>
     <div class="card mt">
       <h2>Учётные записи</h2>
-      <p class="muted">Аналитик смотрит звонки, ставит заметки и выгружает KPI. Удаление записей, скрипт, полный экспорт расшифровок и люди — у администратора. Последнего администратора нельзя отключить.</p>
+      <p class="muted">Оператор видит только свои звонки и не открывает админку. Аналитик смотрит все звонки, ставит заметки и выгружает KPI. Администратор слушает любой звонок, удаляет записи и ведёт людей. Последнего администратора нельзя отключить.</p>
       <table>
         <thead><tr><th>Логин</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th></th></tr></thead>
-        <tbody>${userRows(users)}</tbody>
+        <tbody>${userRows(users, operators)}</tbody>
       </table>
       <h2 class="mt">Сбросить пароль сотрудника</h2>
       <form id="reset-form" class="toolbar">
@@ -1189,6 +1286,11 @@ async function renderAdmin(view) {
         </tbody>
       </table>
     </div>`;
+  const rolePick = $("#new-role");
+  const operatorLabel = $("#new-operator-label");
+  const syncOperatorField = () => { if (operatorLabel) operatorLabel.hidden = rolePick.value !== "operator"; };
+  rolePick.addEventListener("change", syncOperatorField);
+  syncOperatorField();
   const pw = $("#user-form [name=password]");
   pw.addEventListener("input", () => {
     const value = pw.value || "";
@@ -1201,7 +1303,9 @@ async function renderAdmin(view) {
     e.preventDefault();
     const f = e.target;
     try {
-      await api("/admin/users", { method: "POST", json: { username: f.username.value, password: f.password.value, role: f.role.value } });
+      const payload = { username: f.username.value, password: f.password.value, role: f.role.value };
+      if (f.role.value === "operator") payload.operator_id = Number(f.operator_id.value);
+      await api("/admin/users", { method: "POST", json: payload });
       toast("Учётная запись создана");
       renderAdmin(view);
     } catch (err) { toast(err.message, true); }
@@ -1220,8 +1324,17 @@ async function renderAdmin(view) {
   $$(".js-role").forEach((sel) => {
     sel.onchange = async () => {
       if (sel.value === sel.dataset.current) return;
+      const payload = { role: sel.value };
+      if (sel.value === "operator") {
+        if (!sel.dataset.operator) {
+          toast("Оператору нужна карточка сотрудника. Создайте такую учётку в форме выше.", true);
+          sel.value = sel.dataset.current;
+          return;
+        }
+        payload.operator_id = Number(sel.dataset.operator);
+      }
       try {
-        await api(`/admin/users/${sel.dataset.id}`, { method: "PATCH", json: { role: sel.value } });
+        await api(`/admin/users/${sel.dataset.id}`, { method: "PATCH", json: payload });
         toast("Роль обновлена. Старая сессия этого пользователя закрыта");
         renderAdmin(view);
       } catch (err) {
@@ -1274,13 +1387,6 @@ $("#login-form").addEventListener("submit", async (e) => {
     submit.textContent = "Войти в кабинет";
   }
 });
-$("#cred-fill").addEventListener("click", () => {
-  const form = $("#login-form");
-  form.username.value = ($("#cred-user").textContent || "admin").trim();
-  form.password.value = ($("#cred-pass").textContent || "").trim();
-  form.password.focus();
-});
-
 $("#logout").addEventListener("click", async () => {
   try { await api("/auth/logout", { method: "POST" }); } catch {}
   sessionStorage.removeItem("rk_token");

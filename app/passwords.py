@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9._-]{3,32}$")
-ROLES = ("admin", "analyst")
+ROLES = ("admin", "analyst", "operator")
 WEAK = {
     "password",
     "password1",
@@ -31,7 +31,7 @@ def validate_username(username: str) -> str:
 def validate_role(role: str) -> str:
     value = (role or "").strip().lower()
     if value not in ROLES:
-        raise PasswordError("Роль: admin или analyst")
+        raise PasswordError("Роль: admin, analyst или operator")
     return value
 
 

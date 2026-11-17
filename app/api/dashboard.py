@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 
+from app.access import limit_calls
 from app.api.deps import current_user, db_session
 from app.api.serializers import call_item, operator_out
 from app.models import Call, Operator, User
@@ -28,12 +29,12 @@ def _period_start(period: str) -> datetime | None:
 def dashboard(
     period: str = Query("30d"),
     session: Session = Depends(db_session),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> DashboardOut:
     if period not in {"7d", "30d", "all"}:
         period = "30d"
     start = _period_start(period)
-    q = session.query(Call).options(joinedload(Call.quality), joinedload(Call.operator))
+    q = limit_calls(session.query(Call).options(joinedload(Call.quality), joinedload(Call.operator)), user)
     if start:
         q = q.filter(Call.call_at >= start)
     calls = q.all()
@@ -96,11 +97,16 @@ def dashboard(
         key=lambda c: (c.quality.overall, -c.quality.violation_pct),
     )[:6]
     today = datetime.utcnow().date()
+    day_start = datetime(today.year, today.month, today.day)
+
+    def scoped(status: str):
+        return limit_calls(session.query(Call).filter(Call.status == status), user)
+
     queue = QueueOut(
-        queued=session.query(Call).filter(Call.status == "queued").count(),
-        processing=session.query(Call).filter(Call.status == "processing").count(),
-        done_today=session.query(Call).filter(Call.status == "done", Call.uploaded_at >= datetime(today.year, today.month, today.day)).count(),
-        failed=session.query(Call).filter(Call.status == "error").count(),
+        queued=scoped("queued").count(),
+        processing=scoped("processing").count(),
+        done_today=scoped("done").filter(Call.uploaded_at >= day_start).count(),
+        failed=scoped("error").count(),
     )
     return DashboardOut(
         offline=local_model_ready(),

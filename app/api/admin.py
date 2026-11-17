@@ -10,7 +10,7 @@ from app.audit import write_audit
 from app.auth import hash_password, uses_public_bootstrap
 from app.config import settings
 from app.db import db_guard_status
-from app.models import AuditLog, Call, User
+from app.models import AuditLog, Call, Operator, User
 from app.passwords import PasswordError, validate_password, validate_role, validate_username
 from app.schemas import AdminPasswordIn, AdminUserIn, AdminUserPatch, UserOut
 
@@ -25,7 +25,19 @@ def _out(user: User) -> UserOut:
         is_active=bool(user.is_active),
         last_login_at=user.last_login_at,
         must_change_password=uses_public_bootstrap(user),
+        operator_id=user.operator_id,
     )
+
+
+def _operator_link(session: Session, role: str, operator_id: int | None) -> int | None:
+    if role != "operator":
+        return None
+    if operator_id is None:
+        raise HTTPException(status_code=400, detail="Оператору нужна карточка сотрудника")
+    person = session.get(Operator, operator_id)
+    if person is None:
+        raise HTTPException(status_code=400, detail="Оператор не найден")
+    return person.id
 
 
 def _active_admins(session: Session) -> int:
@@ -78,12 +90,14 @@ def create_user(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if session.query(User).filter(User.username == username).one_or_none():
         raise HTTPException(status_code=409, detail="Такой логин уже есть")
+    linked = _operator_link(session, role, body.operator_id)
     user = User(
         username=username,
         password_hash=hash_password(password),
         role=role,
         is_active=1,
         token_version=1,
+        operator_id=linked,
     )
     session.add(user)
     session.flush()
@@ -102,6 +116,8 @@ def patch_user(
     user = session.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if body.operator_id is not None:
+        user.operator_id = _operator_link(session, "operator", body.operator_id)
     if body.role is not None:
         try:
             role = validate_role(body.role)
@@ -109,6 +125,8 @@ def patch_user(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if user.role == "admin" and role != "admin" and _active_admins(session) <= 1:
             raise HTTPException(status_code=400, detail="Нельзя снять последнего администратора")
+        if role == "operator" and user.operator_id is None:
+            raise HTTPException(status_code=400, detail="Оператору нужна карточка сотрудника")
         user.role = role
         user.token_version = int(user.token_version or 1) + 1
         write_audit(session, "user.role", user=admin, detail=f"{user.username} → {role}", request=request)

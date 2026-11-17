@@ -38,15 +38,13 @@
       <form id="login-form" class="gate-card" autocomplete="on">
         <p class="eyebrow">Вход в кабинет</p>
         <h1>Контроль звонков на этой машине</h1>
-        <p class="lead">Для руководителя контакт-центра и службы качества. Запись и текст остаются здесь.</p>
-        <div class="cred" id="cred-box">
-          <div class="cred-kicker">Стартовый вход</div>
-          <div class="cred-row"><span>Логин</span><b id="cred-user">admin</b></div>
-          <div class="cred-row"><span>Пароль</span><b id="cred-pass">CenterInvest2026!</b></div>
-          <button type="button" class="btn row" id="cred-fill">Подставить в форму</button>
-          <p class="hint">Это пароль из инструкции. После входа его нужно сменить.</p>
+        <p class="lead">Администратор слушает любые звонки и ведёт кабинет. Оператор видит только свои разговоры, без админки.</p>
+        <div class="cred" id="cred-box" hidden>
+          <div class="cred-kicker">Учётные записи на этой машине</div>
+          <div id="cred-list"></div>
+          <p class="hint">Пароли видны, пока их не сменили. Нажмите карточку, чтобы подставить вход.</p>
         </div>
-        <label>Логин<input name="username" value="admin" autocomplete="username" required maxlength="64" spellcheck="false" /></label>
+        <label>Логин<input name="username" autocomplete="username" required maxlength="64" spellcheck="false" /></label>
         <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128" /></label>
         <button type="submit" class="btn primary" id="login-submit">Войти в кабинет</button>
         <p class="form-error" id="login-error" hidden></p>
@@ -61,7 +59,7 @@
         <img src="/static/favicon.svg" width="36" height="36" alt="" />
         <div>
           <strong>РечьКонтроль</strong>
-          <span>локальный контур</span>
+          <span id="side-role">локальный контур</span>
         </div>
       </div>
       <nav class="nav">

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.access import reject_operator
 from app.api.deps import current_user, db_session, require_admin
 from app.audit import write_audit
 from app.dataset import evaluate_wer, import_to_queue, start_download_async, status
@@ -17,7 +18,8 @@ class DatasetLimit(BaseModel):
 
 
 @router.get("/dataset")
-def dataset_status(_: User = Depends(current_user)) -> dict:
+def dataset_status(user: User = Depends(current_user)) -> dict:
+    reject_operator(user)
     return status()
 
 
@@ -34,7 +36,8 @@ def dataset_download(
 
 
 @router.post("/dataset/evaluate")
-def dataset_evaluate(limit: int | None = Query(default=12, ge=4, le=40), _: User = Depends(current_user)) -> dict:
+def dataset_evaluate(limit: int | None = Query(default=12, ge=4, le=40), user: User = Depends(current_user)) -> dict:
+    reject_operator(user)
     try:
         return evaluate_wer(limit=limit)
     except RuntimeError as exc:

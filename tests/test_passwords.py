@@ -29,5 +29,6 @@ def test_password_policy():
 
 def test_roles():
     assert validate_role("Admin") == "admin"
+    assert validate_role("operator") == "operator"
     with pytest.raises(PasswordError):
         validate_role("root")

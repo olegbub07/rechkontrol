@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import bearer, current_user, db_session
 from app.audit import write_audit
 from app.auth import (
-    bootstrap_hint,
     clear_login_failures,
     create_token,
     decode_token,
     hash_password,
     note_login_failure,
     revoke_jti,
+    staff_accounts,
     uses_public_bootstrap,
     verify_password,
 )
@@ -36,15 +36,15 @@ def _user_out(user: User) -> UserOut:
         is_active=bool(user.is_active),
         last_login_at=user.last_login_at,
         must_change_password=uses_public_bootstrap(user),
+        operator_id=user.operator_id,
     )
 
 
 @router.get("/auth/bootstrap")
 def bootstrap(request: Request, session: Session = Depends(db_session)) -> dict:
-    user = session.query(User).filter(User.username == settings.admin_username).one_or_none()
     host = request.client.host if request.client else ""
-    matches = bool(user is not None and uses_public_bootstrap(user))
-    return bootstrap_hint(host, user.username if user is not None else None, matches)
+    accounts = staff_accounts(host, session)
+    return {"show_password": bool(accounts), "accounts": accounts}
 
 
 @router.post("/auth/login", response_model=TokenOut)

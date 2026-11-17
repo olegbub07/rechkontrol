@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.access import is_operator, limit_calls, reject_operator, require_call
 from app.api.deps import current_user, db_session, require_admin
 from app.api.serializers import call_detail, call_item, operator_out
 from app.audio import AudioError, sniff_audio
@@ -74,9 +75,12 @@ def list_calls(
     page: int = Query(1, ge=1, le=10000),
     page_size: int = Query(20, ge=1, le=100),
     session: Session = Depends(db_session),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ) -> dict:
-    query = session.query(Call).options(joinedload(Call.operator), joinedload(Call.quality))
+    query = limit_calls(
+        session.query(Call).options(joinedload(Call.operator), joinedload(Call.quality)),
+        user,
+    )
     if status:
         if status not in CALL_STATUSES:
             raise HTTPException(400, "Неизвестный статус")
@@ -96,15 +100,14 @@ def list_calls(
 
 
 @router.get("/calls/{call_id}", response_model=CallDetail)
-def get_call(call_id: int, session: Session = Depends(db_session), _: User = Depends(current_user)) -> CallDetail:
+def get_call(call_id: int, session: Session = Depends(db_session), user: User = Depends(current_user)) -> CallDetail:
     call = (
         session.query(Call)
         .options(joinedload(Call.operator), joinedload(Call.quality), joinedload(Call.transcript))
         .filter(Call.id == call_id)
         .one_or_none()
     )
-    if call is None:
-        raise HTTPException(404, "Звонок не найден")
+    require_call(call, user)
     return call_detail(call)
 
 
@@ -133,6 +136,7 @@ async def upload_calls(
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ) -> list[CallListItem]:
+    reject_operator(user)
     if not files:
         raise HTTPException(400, "Добавьте хотя бы один аудиофайл")
     if len(files) > settings.max_upload_files:
@@ -187,9 +191,9 @@ async def upload_calls(
 
 
 @router.get("/calls/{call_id}/audio")
-def get_audio(call_id: int, session: Session = Depends(db_session), _: User = Depends(current_user)):
-    call = session.get(Call, call_id)
-    if call is None or not call.stored_name:
+def get_audio(call_id: int, session: Session = Depends(db_session), user: User = Depends(current_user)):
+    call = require_call(session.get(Call, call_id), user)
+    if not call.stored_name:
         raise HTTPException(404, "Аудио недоступно")
     try:
         path = safe_audio_path(call.stored_name)
@@ -213,10 +217,9 @@ def reprocess(
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ) -> CallListItem:
+    reject_operator(user)
     with write_lock:
-        call = session.get(Call, call_id)
-        if call is None:
-            raise HTTPException(404, "Звонок не найден")
+        call = require_call(session.get(Call, call_id), user)
         if not call.stored_name:
             raise HTTPException(400, "Демо-звонок без аудио нельзя отправить в очередь Whisper")
         if call.status == "processing":
@@ -261,8 +264,9 @@ def patch_call(
         .filter(Call.id == call_id)
         .one_or_none()
     )
-    if call is None:
-        raise HTTPException(404, "Звонок не найден")
+    require_call(call, user)
+    if is_operator(user):
+        raise HTTPException(403, "Заметку ставит руководитель")
     if body.review_note is not None:
         call.review_note = body.review_note.strip()[:2000]
     if body.flagged is not None:
@@ -300,10 +304,13 @@ def delete_call(
 
 
 @router.get("/queue")
-def queue_status(session: Session = Depends(db_session), _: User = Depends(current_user)) -> dict:
-    queued = session.query(Call).filter(Call.status == "queued").count()
-    processing = session.query(Call).filter(Call.status == "processing").all()
-    failed = session.query(Call).filter(Call.status == "error").count()
+def queue_status(session: Session = Depends(db_session), user: User = Depends(current_user)) -> dict:
+    def scoped(status: str):
+        return limit_calls(session.query(Call).filter(Call.status == status), user)
+
+    queued = scoped("queued").count()
+    processing = scoped("processing").all()
+    failed = scoped("error").count()
     return {
         "queued": queued,
         "processing": [
@@ -315,15 +322,21 @@ def queue_status(session: Session = Depends(db_session), _: User = Depends(curre
 
 
 @router.get("/operators", response_model=list[OperatorOut])
-def list_operators(session: Session = Depends(db_session), _: User = Depends(current_user)) -> list[OperatorOut]:
-    ops = session.query(Operator).order_by(Operator.name).all()
-    return [operator_out(op, list(op.calls)) for op in ops]
+def list_operators(session: Session = Depends(db_session), user: User = Depends(current_user)) -> list[OperatorOut]:
+    query = session.query(Operator).order_by(Operator.name)
+    if is_operator(user):
+        if user.operator_id is None:
+            return []
+        query = query.filter(Operator.id == user.operator_id)
+    ops = query.all()
+    return [operator_out(op, [c for c in op.calls if (not is_operator(user) or c.operator_id == user.operator_id)]) for op in ops]
 
 
 @router.post("/operators", response_model=OperatorOut)
 def create_operator(
-    body: OperatorIn, session: Session = Depends(db_session), _: User = Depends(current_user)
+    body: OperatorIn, session: Session = Depends(db_session), user: User = Depends(current_user)
 ) -> OperatorOut:
+    reject_operator(user)
     op = Operator(name=body.name.strip(), external_id=(body.external_id or "").strip() or None)
     session.add(op)
     try:
@@ -335,7 +348,8 @@ def create_operator(
 
 
 @router.get("/settings", response_model=SettingsOut)
-def get_settings(session: Session = Depends(db_session), _: User = Depends(current_user)) -> SettingsOut:
+def get_settings(session: Session = Depends(db_session), user: User = Depends(current_user)) -> SettingsOut:
+    reject_operator(user)
     script = load_script(session)
     return SettingsOut(
         whisper_model=settings.whisper_model,
@@ -369,7 +383,8 @@ def put_settings(
 
 
 @router.post("/analyze-text", response_model=QualityOut)
-def analyze_text(body: AnalyzeTextIn, session: Session = Depends(db_session), _: User = Depends(current_user)) -> QualityOut:
+def analyze_text(body: AnalyzeTextIn, session: Session = Depends(db_session), user: User = Depends(current_user)) -> QualityOut:
+    reject_operator(user)
     script = load_script(session)
     if body.segments:
         turns = [s.model_dump() for s in body.segments]

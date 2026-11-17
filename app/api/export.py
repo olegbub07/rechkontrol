@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
+from app.access import reject_operator
 from app.api.deps import current_user, db_session
 from app.audit import write_audit
 from app.api.serializers import call_detail
@@ -103,6 +104,7 @@ def export_csv(
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ):
+    reject_operator(user)
     calls = _rows(session, operator_id, date_from, date_to)
     write_audit(session, "export.csv", user=user, detail=str(len(calls)), request=request)
     session.commit()
@@ -130,6 +132,7 @@ def export_json(
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ):
+    reject_operator(user)
     if full and user.role != "admin":
         raise HTTPException(403, "Полный экспорт с расшифровками доступен администратору")
     calls = _rows(session, operator_id, date_from, date_to)

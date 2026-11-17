@@ -35,7 +35,7 @@ WinError 10048 — это занятый порт, не ошибка кода.
 |---|---|---|
 | `APP_HOST` / `APP_PORT` | адрес | `127.0.0.1` / `8080`. Локальный запуск также открывает `localhost` |
 | `APP_DEBUG` | OpenAPI `/docs` | `false` |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | вход | `admin` / `CenterInvest2026!` |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | первая учётка администратора, если её ещё нет | `admin` / `CenterInvest2026!`, при старте заменяется на `CentrAdmin2026!`, пока пароль не сменили вручную |
 | `WHISPER_MODEL` | `tiny`, `base`, `small`, … | `base` |
 | `WHISPER_DEVICE` | `cpu` или `cuda` | `cpu` |
 | `WHISPER_COMPUTE_TYPE` | `int8` на CPU | `int8` |

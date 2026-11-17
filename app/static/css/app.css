@@ -137,6 +137,25 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .cred .btn { margin-top: 10px; background: var(--gold); color: var(--night); }
 .cred .hint { color: #cbbfa6; margin: 8px 0 0; }
+.cred-account {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(212, 181, 106, 0.4);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.cred-account b { display: block; color: var(--gold-2); font-size: 15px; }
+.cred-account span { display: block; margin-top: 3px; color: #cbbfa6; font-size: 12px; line-height: 1.35; }
+.cred-account:hover, .cred-account:focus { border-color: var(--gold); outline: none; }
+body.role-operator .side { background: #14241c; border-right-color: rgba(140, 186, 154, 0.45); }
+body.role-operator .side-brand span { color: #c5e2d0; }
+body.role-admin .side { border-right-color: rgba(212, 181, 106, 0.7); }
+.player-title { margin: 14px 0 0; font-size: 16px; }
 .eyebrow {
   font-size: 11px;
   letter-spacing: 0.2em;

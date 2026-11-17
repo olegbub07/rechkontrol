@@ -17,6 +17,7 @@ class UserOut(BaseModel):
     is_active: bool = True
     last_login_at: datetime | None = None
     must_change_password: bool = False
+    operator_id: int | None = None
 
 
 class PasswordChangeIn(BaseModel):
@@ -28,11 +29,13 @@ class AdminUserIn(BaseModel):
     username: str = Field(min_length=3, max_length=32)
     password: str = Field(min_length=10, max_length=128)
     role: str = "analyst"
+    operator_id: int | None = None
 
 
 class AdminUserPatch(BaseModel):
     role: str | None = None
     is_active: bool | None = None
+    operator_id: int | None = None
 
 
 class AdminPasswordIn(BaseModel):

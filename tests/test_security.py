@@ -119,29 +119,84 @@ def test_restrict_file_keeps_owner_access(tmp_path):
 def test_login_reaches_api_and_bootstrap():
     from fastapi.testclient import TestClient
 
+    from app.auth import hash_password
+    from app.db import SessionLocal
     from app.main import app
+    from app.models import User
 
-    with TestClient(app) as client:
-        hint = client.get("/api/auth/bootstrap")
-        assert hint.status_code == 200
-        body = hint.json()
-        assert "show_password" in body
-        if body["show_password"]:
-            assert body["password"] == "CenterInvest2026!"
-            login = client.post(
-                "/api/auth/login",
-                json={"username": body["username"], "password": body["password"]},
+    name = "qa.listener"
+    with SessionLocal() as session:
+        old = session.query(User).filter(User.username == name).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.commit()
+        session.add(
+            User(
+                username=name,
+                password_hash=hash_password("ListenPass12!"),
+                role="admin",
+                is_active=1,
+                token_version=1,
             )
+        )
+        session.commit()
+    try:
+        with TestClient(app) as client:
+            hint = client.get("/api/auth/bootstrap")
+            assert hint.status_code == 200
+            body = hint.json()
+            accounts = {item["username"]: item for item in body["accounts"]}
+            assert accounts["operator"]["password"] == "CentrOperator2026!"
+            assert accounts["operator"]["role"] == "operator"
+            if "admin" in accounts:
+                assert accounts["admin"]["password"] == "CentrAdmin2026!"
+                assert accounts["admin"]["role"] == "admin"
+            login = client.post("/api/auth/login", json={"username": name, "password": "ListenPass12!"})
             assert login.status_code == 200
-            token = login.json()["token"]
-            headers = {"Authorization": f"Bearer {token}"}
+            headers = {"Authorization": f"Bearer {login.json()['token']}"}
             me = client.get("/api/auth/me", headers=headers)
             assert me.status_code == 200
-            assert me.json()["must_change_password"] is True
-            blocked = client.get("/api/calls", headers=headers)
-            assert blocked.status_code == 403
-            changed = client.get("/api/admin/posture", headers=headers)
-            assert changed.status_code == 403
+            assert me.json()["role"] == "admin"
+            assert me.json()["must_change_password"] is False
+            calls = client.get("/api/calls?page_size=100", headers=headers)
+            assert calls.status_code == 200
+            assert client.get("/api/admin/posture", headers=headers).status_code == 200
+            listed = calls.json()["items"]
+            assert listed
+            audio = client.get(f"/api/calls/{listed[0]['id']}/audio", headers=headers)
+            assert audio.status_code in {200, 404}
+
+            operator = client.post(
+                "/api/auth/login",
+                json={"username": "operator", "password": accounts["operator"]["password"]},
+            )
+            assert operator.status_code == 200
+            op_headers = {"Authorization": f"Bearer {operator.json()['token']}"}
+            assert operator.json()["user"]["role"] == "operator"
+            assert client.get("/api/admin/overview", headers=op_headers).status_code == 403
+            assert client.get("/api/admin/posture", headers=op_headers).status_code == 403
+            assert client.get("/api/settings", headers=op_headers).status_code == 403
+            assert client.get("/api/export/csv", headers=op_headers).status_code == 403
+            assert client.get("/api/dataset", headers=op_headers).status_code == 403
+            own = client.get("/api/calls?page_size=100", headers=op_headers)
+            assert own.status_code == 200
+            own_items = own.json()["items"]
+            assert own_items
+            assert all(item.get("operator_external_id") == "OP-104" for item in own_items)
+            foreign = next(item for item in listed if item.get("operator_external_id") != "OP-104")
+            hidden = client.get(f"/api/calls/{foreign['id']}", headers=op_headers)
+            assert hidden.status_code == 404
+            hidden_audio = client.get(f"/api/calls/{foreign['id']}/audio", headers=op_headers)
+            assert hidden_audio.status_code == 404
+            note = client.patch(f"/api/calls/{own_items[0]['id']}", headers=op_headers, json={"flagged": True})
+            assert note.status_code == 403
+            assert client.get("/api/dashboard", headers=op_headers).status_code == 200
+    finally:
+        with SessionLocal() as session:
+            row = session.query(User).filter(User.username == name).one_or_none()
+            if row is not None:
+                session.delete(row)
+                session.commit()
 
 
 def test_login_lock_and_logout_survive_restart():

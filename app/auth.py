@@ -21,6 +21,22 @@ _DUMMY_HASH: str | None = None
 _revoked: dict[str, int] = {}
 _revoke_lock = Lock()
 PUBLIC_BOOTSTRAP_PASSWORD = "CenterInvest2026!"
+SEEDED_STAFF = (
+    {
+        "username": "admin",
+        "password": "CentrAdmin2026!",
+        "role": "admin",
+        "title": "Администратор",
+        "hint": "все звонки, прослушивание и админка",
+    },
+    {
+        "username": "operator",
+        "password": "CentrOperator2026!",
+        "role": "operator",
+        "title": "Оператор",
+        "hint": "только свои разговоры, без админки",
+    },
+)
 
 
 def hash_password(password: str) -> str:
@@ -190,6 +206,53 @@ def bootstrap_hint(host: str, username: str | None, password_matches: bool) -> d
         "username": username,
         "password": PUBLIC_BOOTSTRAP_PASSWORD,
     }
+
+
+def staff_accounts(host: str, session: Session) -> list[dict]:
+    """Пароли учебных учёток видны только с этой машины и только пока их не сменили."""
+    loopback = host in {"127.0.0.1", "::1", "localhost", "testclient"}
+    if not loopback:
+        return []
+    found = []
+    for item in SEEDED_STAFF:
+        user = session.query(User).filter(User.username == item["username"]).one_or_none()
+        if user is None or not verify_password(item["password"], user.password_hash):
+            continue
+        found.append(
+            {
+                "username": item["username"],
+                "password": item["password"],
+                "role": item["role"],
+                "title": item["title"],
+                "hint": item["hint"],
+            }
+        )
+    return found
+
+
+def ensure_staff_accounts(session: Session) -> None:
+    from app.models import Operator
+
+    admin = ensure_admin(session)
+    if verify_password(PUBLIC_BOOTSTRAP_PASSWORD, admin.password_hash):
+        admin.password_hash = hash_password(SEEDED_STAFF[0]["password"])
+        admin.token_version = int(admin.token_version or 1) + 1
+    person = session.query(Operator).filter(Operator.external_id == "OP-104").one_or_none()
+    user = session.query(User).filter(User.username == "operator").one_or_none()
+    if user is None:
+        user = User(
+            username="operator",
+            password_hash=hash_password(SEEDED_STAFF[1]["password"]),
+            role="operator",
+            is_active=1,
+            token_version=1,
+            operator_id=person.id if person is not None else None,
+        )
+        session.add(user)
+        session.flush()
+        return
+    if user.role == "operator" and user.operator_id is None and person is not None:
+        user.operator_id = person.id
 
 
 def ensure_admin(session: Session) -> User:
