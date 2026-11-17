@@ -755,7 +755,7 @@ async function renderCall(view, id) {
     box.innerHTML = rows.length ? rows.map((s) => `
       <button type="button" class="turn ${s.role}" data-start="${Number(s.start) || 0}" data-end="${Number(s.end) || 0}">
         <div class="meta">${s.role === "operator" ? "Оператор" : "Клиент"} · ${mmss(s.start)}</div>
-        <div>${highlight(s.text, query)}</div>
+        <div>${typeof turnText === "function" ? turnText(s, query) : highlight(s.text, query)}</div>
       </button>`).join("") : `<p class="empty">${escapeHtml(call.full_text || "Текст появится после расшифровки")}</p>`;
     $$("#turns .turn").forEach((el) => {
       el.onclick = () => {
@@ -769,6 +769,7 @@ async function renderCall(view, id) {
   const liveLabel = $("#live-label");
   if (liveLabel) liveLabel.textContent = dossierLine(call);
   paintTurns("");
+  if (typeof mountTurnLegend === "function") mountTurnLegend(call);
   $("#turn-q").oninput = () => paintTurns($("#turn-q").value);
   const onlyFail = $("#only-fail");
   if (onlyFail) onlyFail.onchange = () => {

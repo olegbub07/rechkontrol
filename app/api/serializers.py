@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.config import settings
+from app.highlight import segment_highlights
 from app.models import Call
 from app.pii import mask_segments, mask_text
 from app.schemas import CallDetail, CallListItem, CheckOut, OperatorOut, QualityOut, SegmentOut
@@ -134,8 +135,11 @@ def _mask_violation(item: dict, mask) -> dict:
     return {key: mask(value) if isinstance(value, str) and key in {"evidence", "text", "quote"} else value for key, value in item.items()}
 
 
-def call_detail(call: Call, unmasked: bool = False) -> CallDetail:
-    """Расшифровка в ответе API маскируется (ПДн), если не запрошен исходный текст."""
+def call_detail(call: Call, unmasked: bool = False, script: dict | None = None) -> CallDetail:
+    """Расшифровка в ответе API маскируется (ПДн), если не запрошен исходный текст.
+
+    script (load_script) - если передан, у реплик появляется подсветка сработавших правил.
+    """
     masking = settings.pii_masking and not unmasked
     mask = mask_text if masking else (lambda value: value)
     base = call_item(call)
@@ -164,6 +168,17 @@ def call_detail(call: Call, unmasked: bool = False) -> CallDetail:
             checks=_checks(_json_list(q.checks_json), mask),
             summary=mask(q.summary),
         )
+    if script is not None and segments:
+        raw_checks = _json_list(call.quality.checks_json) if call.quality else []
+        marks = segment_highlights(
+            [s.model_dump() for s in segments],
+            [c for c in raw_checks if isinstance(c, dict)],
+            script["checklist"],
+            script.get("company_phrases"),
+            script.get("extra_script_phrases"),
+            masked=masking,
+        )
+        segments = [s.model_copy(update={"spans": m["spans"], "markers": m["markers"]}) for s, m in zip(segments, marks)]
     return CallDetail(
         **base.model_dump(),
         language=call.language,

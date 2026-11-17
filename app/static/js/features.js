@@ -126,3 +126,57 @@ async function mountChecklistEditor(view) {
 }
 
 document.addEventListener("DOMContentLoaded", registerFeatureAudit);
+
+/* ---------- Подсветка правил в расшифровке ---------- */
+
+const HL_KINDS = {
+  ok: "пункт чек-листа выполнен",
+  bad: "нарушение",
+  neg: "негативная лексика",
+  pii: "персональные данные",
+  miss: "пропущенный пункт",
+};
+
+function hlTip(item) {
+  return escapeHtml([item.title, item.impact].filter(Boolean).join(" — "));
+}
+
+function turnText(seg, query) {
+  const text = String(seg.text || "");
+  const markers = (seg.markers || []).map((m) =>
+    `<span class="hl-miss" title="${hlTip(m)}">${escapeHtml(m.title)}</span>`).join("");
+  const head = markers ? `<span class="hl-markers">${markers}</span>` : "";
+  if ((query || "").trim().length >= 2 || !(seg.spans || []).length) return head + highlight(text, query);
+  let html = "";
+  let pos = 0;
+  for (const sp of seg.spans) {
+    const start = Math.max(pos, Number(sp.start) || 0);
+    const end = Math.min(text.length, Number(sp.end) || 0);
+    if (end <= start) continue;
+    html += escapeHtml(text.slice(pos, start));
+    html += `<span class="hl hl-${escapeHtml(sp.kind)}" title="${hlTip(sp)}">${escapeHtml(text.slice(start, end))}</span>`;
+    pos = end;
+  }
+  html += escapeHtml(text.slice(pos));
+  return head + html;
+}
+
+function mountTurnLegend(call) {
+  const box = $("#turns");
+  if (!box || $("#hl-legend")) return;
+  const counts = {};
+  for (const s of call.segments || []) {
+    for (const sp of s.spans || []) counts[sp.kind] = (counts[sp.kind] || 0) + 1;
+    for (const m of s.markers || []) counts[m.kind] = (counts[m.kind] || 0) + 1;
+  }
+  if (!Object.keys(counts).length) return;
+  const items = Object.entries(HL_KINDS).filter(([k]) => counts[k])
+    .map(([k, label]) => `<span class="hl-key"><span class="${k === "miss" ? "hl-miss" : `hl hl-${k}`}">${label}</span> ${counts[k]}</span>`).join("");
+  box.insertAdjacentHTML("beforebegin", `
+    <div class="hl-legend" id="hl-legend">
+      <label class="hl-toggle"><input type="checkbox" id="hl-on" checked /> Подсветка правил</label>
+      ${items}
+      <span class="hint">Наведите на фрагмент — правило и влияние на оценку</span>
+    </div>`);
+  $("#hl-on").onchange = (e) => box.classList.toggle("hl-off", !e.target.checked);
+}

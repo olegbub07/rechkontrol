@@ -97,12 +97,30 @@ class CallListItem(BaseModel):
     flagged: bool = False
 
 
+class SpanOut(BaseModel):
+    start: int
+    end: int
+    kind: str
+    rule: str
+    title: str
+    impact: str = ""
+
+
+class MarkerOut(BaseModel):
+    kind: str
+    rule: str
+    title: str
+    impact: str = ""
+
+
 class SegmentOut(BaseModel):
     start: float
     end: float
     speaker: str
     role: str
     text: str
+    spans: list[SpanOut] = Field(default_factory=list)
+    markers: list[MarkerOut] = Field(default_factory=list)
 
 
 class CheckOut(BaseModel):

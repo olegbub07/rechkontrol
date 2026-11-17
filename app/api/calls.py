@@ -119,7 +119,7 @@ def get_call(
     require_call(call, user)
     if unmasked:
         write_audit(session, "call.unmask", user=user, detail=str(call_id), request=request)
-    return call_detail(call, unmasked=unmasked)
+    return call_detail(call, unmasked=unmasked, script=load_script(session))
 
 
 async def _store_encrypted(upload: UploadFile, path: Path, max_bytes: int) -> str:
@@ -301,7 +301,7 @@ def patch_call(
     write_audit(session, "call.review", user=user, detail=str(call.id), request=request)
     session.commit()
     session.refresh(call)
-    return call_detail(call)
+    return call_detail(call, script=load_script(session))
 
 
 @router.delete("/calls/{call_id}")
