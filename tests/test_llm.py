@@ -78,3 +78,15 @@ def test_failure_and_remote_url_fall_back_to_rules(monkeypatch):
     monkeypatch.setattr("app.llm.settings.llm_allow_remote", False)
     assert llm.enrich(report, TURNS) is report
     assert called == []
+
+
+def test_prompt_does_not_leak_rule_scores():
+    from app import llm
+    from app.demo_calls import DEMO_CALLS
+    from app.quality import analyze
+
+    turns = DEMO_CALLS[0]["segments"]
+    report = analyze(turns)
+    prompt = llm.build_prompt(turns, report)
+    assert "politeness=" not in prompt and "по правилам" not in prompt
+    assert "Оператор:" in prompt

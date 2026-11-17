@@ -22,6 +22,9 @@ log = logging.getLogger("rechkontrol.llm")
 METRICS = ("politeness", "completeness", "script_compliance", "resolution")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MAX_CHARS = 12000
+# Ответ - короткий JSON (около 110 токенов). Потолок не даёт модели генерировать до таймаута:
+# на замере qwen2.5:3b один звонок из 14 не ответил за 120 с, повтор занял 5-6 с.
+MAX_TOKENS = 600
 
 SYSTEM_PROMPT = (
     "Ты эксперт по контролю качества контакт-центра банка. Оцени работу ОПЕРАТОРА по расшифровке. "
@@ -53,8 +56,10 @@ def build_prompt(turns: list[dict], report: QualityReport) -> str:
     dialog = "\n".join(lines)
     if len(dialog) > MAX_CHARS:
         dialog = dialog[: MAX_CHARS // 2] + "\n…\n" + dialog[-MAX_CHARS // 2 :]
-    hints = ", ".join(f"{m}={getattr(report, m)}" for m in METRICS)
-    return f"Оценки по правилам (для сравнения, можно не соглашаться): {hints}.\n\nРасшифровка:\n{dialog}"
+    # Оценки правил в промпт не передаются: на замерах qwen2.5:3b в 4 из 6 звонков
+    # просто копировал их, и смешивание теряло смысл. Модель должна оценивать сама.
+    del report
+    return f"Расшифровка звонка:\n{dialog}"
 
 
 def parse_answer(text: str) -> dict | None:
@@ -93,7 +98,7 @@ def ask_ollama(prompt: str) -> dict | None:
         "model": settings.llm_model,
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0},
+        "options": {"temperature": 0, "num_predict": MAX_TOKENS},
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -103,6 +108,16 @@ def ask_ollama(prompt: str) -> dict | None:
         response = httpx.post(f"{base}/api/chat", json=body, timeout=settings.llm_timeout_sec)
         response.raise_for_status()
         content = (response.json().get("message") or {}).get("content") or ""
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            log.warning(
+                "В Ollama нет модели %s, оценка только правилами. Скачайте её: ollama pull %s",
+                settings.llm_model,
+                settings.llm_model,
+            )
+        else:
+            log.warning("Ollama ответила %s, оценка только правилами", exc.response.status_code)
+        return None
     except Exception as exc:
         log.warning("Ollama недоступна, оценка только правилами: %s", exc.__class__.__name__)
         return None

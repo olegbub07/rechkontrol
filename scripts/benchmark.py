@@ -195,6 +195,48 @@ def cmd_wer(args) -> None:
         )
 
 
+def cmd_llm(args) -> None:
+    """Оценка демо-звонков локальной LLM: время, валидность JSON, оценки правил и модели."""
+    from app import llm
+    from app.config import settings
+    from app.demo_calls import DEMO_CALLS
+    from app.quality import analyze
+
+    settings.llm_provider = "ollama"
+    if args.model:
+        settings.llm_model = args.model
+    calls = DEMO_CALLS[: args.calls]
+    if args.warmup and calls:
+        t0 = time.perf_counter()
+        llm.ask_ollama(llm.build_prompt(calls[0]["segments"], analyze(calls[0]["segments"])))
+        print(f"прогрев (загрузка модели в память): {time.perf_counter() - t0:.1f} с")
+    ok = 0
+    times = []
+    for item in calls:
+        turns = item["segments"]
+        report = analyze(turns)
+        t0 = time.perf_counter()
+        answer = llm.ask_ollama(llm.build_prompt(turns, report))
+        sec = round(time.perf_counter() - t0, 1)
+        times.append(sec)
+        ok += answer is not None
+        record = {
+            "kind": "llm",
+            "model": settings.llm_model,
+            "call": item["filename"],
+            "turns": len(turns),
+            "sec": sec,
+            "valid_json": answer is not None,
+            "rules": {m: round(getattr(report, m)) for m in llm.METRICS},
+            "llm": {m: round(answer[m]) for m in llm.METRICS} if answer else None,
+            "recommendations": answer["recommendations"] if answer else None,
+        }
+        save(record)
+        print(json.dumps(record, ensure_ascii=False))
+    if times:
+        print(f"{settings.llm_model}: валидный JSON {ok}/{len(times)}, время {min(times)}-{max(times)} с, среднее {sum(times) / len(times):.1f} с")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -214,6 +256,11 @@ def main() -> None:
     p.add_argument("--clips", type=int, default=40)
     p.add_argument("--compute-type", default=None)
     p.set_defaults(func=cmd_wer)
+    p = sub.add_parser("llm", help="оценка демо-звонков локальной LLM (нужна запущенная Ollama)")
+    p.add_argument("--model", default=None, help="по умолчанию LLM_MODEL")
+    p.add_argument("--calls", type=int, default=5)
+    p.add_argument("--warmup", action="store_true", help="сначала один прогон для загрузки модели")
+    p.set_defaults(func=cmd_llm)
     args = parser.parse_args()
     args.func(args)
 
