@@ -66,7 +66,7 @@ def test_long_call_uses_batched_profile():
     assert short["initial_prompt"]
     assert long["use_batch"] is True
     assert long["beam_size"] == 1
-    assert long["word_timestamps"] is False
+    assert long["word_timestamps"] is True
     assert long["initial_prompt"] is None
     assert long["beam_size"] >= 1
 

@@ -34,7 +34,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://rechkontrol:${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}@db:5432/rechkontrol
-      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float32}
       PII_MASKING: ${PII_MASKING:-true}
       DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Moscow}

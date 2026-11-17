@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     data_dir: Path = DATA_DIR
     # Пусто: SQLite в data/app.db. Например postgresql+psycopg://user:pass@127.0.0.1:5432/rechkontrol
     database_url: str = ""
-    whisper_model: str = "base"
+    whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "float32"
     max_parallel_jobs: int = 1

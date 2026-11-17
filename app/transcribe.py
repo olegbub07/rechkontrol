@@ -29,7 +29,7 @@ KNOWN_MODELS = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
 
 
 def model_name() -> str:
-    return (settings.whisper_model or "base").strip()
+    return (settings.whisper_model or "small").strip()
 
 
 def local_model_dir(name: str | None = None) -> Path:
@@ -85,7 +85,7 @@ def decode_profile(duration: float | None) -> dict:
         "use_batch": long_audio,
         "beam_size": 1 if case_sla else configured_beam,
         "batch_size": batch if long_audio else 1,
-        "word_timestamps": not case_sla,
+        "word_timestamps": True,  # нужны для разделения по голосу; на 10 мин +~18% времени
         "initial_prompt": None if long_audio else BANK_PROMPT,
     }
 

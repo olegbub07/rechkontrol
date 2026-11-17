@@ -89,6 +89,13 @@ function Initialize-EnvFile([bool]$ForDocker) {
         $changed = $true
         Say "  LLM_PROVIDER=ollama записан в .env"
     }
+    if ((Get-EnvValue $lines "WHISPER_MODEL") -eq "base" -and -not ($lines -match "WHISPER_MODEL_MIGRATED")) {
+        # base был старым значением по умолчанию; small заметно грамотнее. Один раз переводим.
+        $lines = Set-EnvValue $lines "WHISPER_MODEL" "small"
+        $lines = @($lines) + "# WHISPER_MODEL_MIGRATED: base -> small (вернуть base можно руками, больше не трогаем)"
+        $changed = $true
+        Say "  WHISPER_MODEL: base -> small (точнее распознаёт; первый звонок докачает ~480 МБ)" "Yellow"
+    }
     if ($changed) { Write-Utf8NoBom ".env" $lines }
     if ($created) { Say "  создан .env из .env.example" "Green" } else { Say "  .env уже есть, используется он" }
     return $lines

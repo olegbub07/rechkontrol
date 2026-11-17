@@ -3,7 +3,7 @@
 ## Требования
 
 - Windows 10/11 или Linux, Python 3.11+
-- Для реального STT: ~150 МБ на модель Whisper `base` и несколько ГБ RAM
+- Для реального STT: ~480 МБ на модель Whisper `small` (по умолчанию) и несколько ГБ RAM
 - GPU не обязателен (`WHISPER_DEVICE=cpu`)
 
 ## Установка
@@ -39,7 +39,7 @@ WinError 10048 — это занятый порт, не ошибка кода.
 | `APP_DEBUG` | OpenAPI `/docs` | `false` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | первая учётка администратора, если её ещё нет | `admin` / пусто: пароль генерируется при первом запуске и пишется в `data/initial_credentials.txt` |
 | `TRUSTED_PROXIES` | адреса reverse-proxy, от которых принимается `X-Forwarded-For` | пусто |
-| `WHISPER_MODEL` | `tiny`, `base`, `small`, … | `base` |
+| `WHISPER_MODEL` | `tiny`, `base`, `small`, … | `small` |
 | `WHISPER_DEVICE` | `cpu` или `cuda` | `cpu` |
 | `WHISPER_COMPUTE_TYPE` | `float32`, `int8_float32` или `int8`; int8 быстрее, но проверьте WER (docs/PERFORMANCE.md) | `float32` |
 | `MAX_PARALLEL_JOBS` | слоты очереди | `1` |
@@ -172,7 +172,7 @@ DATABASE_URL=postgresql+psycopg://rechkontrol:ПАРОЛЬ@127.0.0.1:5432/rechko
 2. `docker compose up -d --build`
 3. Стартовые пароли кабинета: `docker compose logs app` или `docker compose exec app cat data/initial_credentials.txt`.
 
-Оба порта публикуются только на `127.0.0.1` (5432 и 8080; порт приложения можно сменить через `APP_PORT` в `.env`). Данные PostgreSQL лежат в томе `pgdata`, ключи, аудио, модели Whisper и стартовые пароли приложения - в томе `appdata` (`/app/data` в контейнере). Bind-mount `./data` не используется: Docker создаёт такую папку от root, и приложение (uid 1000) не может в неё писать. Первый звонок после старта ждёт скачивания модели Whisper в этот том (около 150 МБ для `base`).
+Оба порта публикуются только на `127.0.0.1` (5432 и 8080; порт приложения можно сменить через `APP_PORT` в `.env`). Данные PostgreSQL лежат в томе `pgdata`, ключи, аудио, модели Whisper и стартовые пароли приложения - в томе `appdata` (`/app/data` в контейнере). Bind-mount `./data` не используется: Docker создаёт такую папку от root, и приложение (uid 1000) не может в неё писать. Первый звонок после старта ждёт скачивания модели Whisper в этот том (около 480 МБ для `small`).
 
 Проверено 17.11.2026 на Docker 29.10.0 и Compose v5.7.1: сборка, старт с PostgreSQL 17, стартовые пароли, обязательная смена пароля, загрузка и расшифровка WAV (клип 10 с и запись 10,2 мин), экспорт CSV/JSON, 403 для оператора, оценка через сервис `ollama`.
 
