@@ -259,7 +259,7 @@ function compareRangeNote(data) {
   const to = fmtWeek(data.data_to);
   const spanDays = Math.round((new Date(data.data_to) - new Date(data.data_from)) / 86400000) + 1;
   const short = !data.period_days || spanDays < data.period_days;
-  return ` Оценённые звонки есть с ${from} по ${to}${short && data.period !== "7d" ? " - поэтому «30 дней» и «всё время» могут показывать одинаковые цифры" : ""}.`;
+  return ` Оценённые звонки есть с ${from} по ${to}${short && !["7d", "custom"].includes(data.period) ? " - поэтому «30 дней» и «всё время» могут показывать одинаковые цифры" : ""}.`;
 }
 
 function mistakeChips(list) {
@@ -267,14 +267,46 @@ function mistakeChips(list) {
   return list.map((m) => `<span class="mistake" title="Провален в ${m.calls} зв. из периода">${escapeHtml(m.title)} · ${m.share.toFixed(0)}%</span>`).join("");
 }
 
+function compareQuery(period) {
+  const p = new URLSearchParams({ period });
+  if (state.cmpFrom) p.set("date_from", state.cmpFrom);
+  if (state.cmpTo) p.set("date_to", state.cmpTo);
+  return p.toString();
+}
+
+function catCell(o) {
+  const f = (v) => (v == null ? "—" : v.toFixed(0));
+  return `<span title="Вежливость · Полнота · Скрипт · Решение">${f(o.politeness)} · ${f(o.completeness)} · ${f(o.script_compliance)} · ${f(o.resolution)}</span>`;
+}
+
+async function downloadCompareXlsx(period, button) {
+  if (button) button.disabled = true;
+  try {
+    const res = await api(`/operators/compare.xlsx?${compareQuery(period)}`, { raw: true });
+    const blob = await res.blob();
+    const plain = /filename="?([^";]+)"?/i.exec(res.headers.get("content-disposition") || "");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = plain ? plain[1] : "operators.xlsx";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    toast("Сводка выгружена в Excel");
+  } catch (err) {
+    toast(err.message, true);
+  }
+  if (button) button.disabled = false;
+}
+
 async function mountOperatorCompare(view) {
   const period = state.period === "7d" || state.period === "all" ? state.period : "30d";
   let data;
   try {
-    data = await api(`/operators/compare?period=${period}`);
+    data = await api(`/operators/compare?${compareQuery(period)}`);
   } catch (ex) {
+    toast(ex.message, true);
     return;
   }
+  const old = view.querySelector(".op-compare");
   const self = data.scope === "self";
   const card = document.createElement("div");
   card.className = "card mt op-compare";
@@ -286,29 +318,55 @@ async function mountOperatorCompare(view) {
       <td>${pill(o.overall)}</td>
       <td>${deltaBadge(o.delta)}</td>
       <td>${sparkline(o.trend)}</td>
+      <td>${catCell(o)}</td>
       <td>${o.violation_pct == null ? "—" : o.violation_pct.toFixed(0) + "%"}</td>
+      <td>${o.rude_calls ? `<span class="mistake" title="Звонков с грубостью или матом">${o.rude_calls}</span>` : "0"}</td>
       <td class="mistakes">${mistakeChips(o.top_mistakes)}</td>
       ${self ? "" : `<td><button class="btn ghost small-btn" type="button" data-pdf="${o.id}" title="PDF-отчёт за период дашборда">PDF</button></td>`}
     </tr>`).join("");
   const team = data.team;
   card.innerHTML = `
     <h2>${self ? "Моя динамика" : "Сравнение операторов"}</h2>
-    <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} Период как у дашборда.${compareRangeNote(data)}</p>
+    <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} ${data.period === "custom" ? "Свой период." : "Период как у дашборда."}${compareRangeNote(data)}</p>
+    <form class="toolbar cmp-range">
+      <label>С <input type="date" name="from" value="${state.cmpFrom || ""}" /></label>
+      <label>По <input type="date" name="to" value="${state.cmpTo || ""}" /></label>
+      <button class="btn ghost row" type="submit">Показать</button>
+      ${state.cmpFrom || state.cmpTo ? `<button class="btn ghost row" type="button" data-reset>Как у дашборда</button>` : ""}
+      <button class="btn gold row" type="button" data-xlsx>Excel</button>
+    </form>
     ${data.unassigned ? `<p class="muted cmp-note">Звонков без оператора за период: <b>${data.unassigned}</b>. Они входят в общие цифры дашборда, но не в рейтинг и PDF. Оператора можно назначить в карточке звонка или указать при загрузке (поле «Оператор» или код вида OP-104 в имени файла).</p>` : ""}
     ${rows ? `<div class="table-scroll cmp-scroll"><table class="cmp-table">
-      <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th>Нарушения</th><th>Частые ошибки</th>${self ? "" : "<th></th>"}</tr></thead>
+      <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th title="Вежливость · Полнота · Скрипт · Решение">В · П · С · Р</th><th>Нарушения</th><th>Грубость</th><th>Частые ошибки</th>${self ? "" : "<th></th>"}</tr></thead>
       <tbody>${rows}</tbody></table></div>` : `<p class="empty">Нет оценённых звонков с оператором за период</p>`}
     ${team && team.top_mistakes.length ? `<h3 class="cmp-sub">Частые ошибки команды</h3>
       <div class="cmp-team">${team.top_mistakes.map((m) => `
         <div class="cmp-mistake"><span>${escapeHtml(m.title)}</span><progress class="meter" max="100" value="${m.share}"></progress><span class="muted">${m.calls} зв. · ${m.share.toFixed(0)}%</span></div>`).join("")}
       </div>` : ""}`;
-  const cards = view.querySelectorAll(":scope > .card");
-  const last = cards[cards.length - 1];
-  if (last) view.insertBefore(card, last); else view.appendChild(card);
+  if (old) {
+    old.replaceWith(card);
+  } else {
+    const cards = view.querySelectorAll(":scope > .card");
+    const last = cards[cards.length - 1];
+    if (last) view.insertBefore(card, last); else view.appendChild(card);
+  }
   const span = { "7d": 6, "30d": 29, all: 365 }[period];
   card.querySelectorAll("[data-pdf]").forEach((b) => {
-    b.onclick = () => downloadOperatorPdf(b.dataset.pdf, daysAgo(span), isoDay(new Date()), b);
+    const from = state.cmpFrom || daysAgo(span);
+    const to = state.cmpTo || isoDay(new Date());
+    b.onclick = () => downloadOperatorPdf(b.dataset.pdf, from, to, b);
   });
+  const range = card.querySelector(".cmp-range");
+  range.onsubmit = (e) => {
+    e.preventDefault();
+    if (range.from.value && range.to.value && range.from.value > range.to.value) { toast("Начало периода позже конца", true); return; }
+    state.cmpFrom = range.from.value || null;
+    state.cmpTo = range.to.value || null;
+    mountOperatorCompare(view);
+  };
+  const reset = range.querySelector("[data-reset]");
+  if (reset) reset.onclick = () => { state.cmpFrom = null; state.cmpTo = null; mountOperatorCompare(view); };
+  range.querySelector("[data-xlsx]").onclick = (e) => downloadCompareXlsx(period, e.currentTarget);
 }
 
 /* ---------- PDF-отчёт по оператору ---------- */

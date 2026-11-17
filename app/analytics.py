@@ -75,6 +75,7 @@ def summary(calls: list[Call]) -> dict:
     resp = [c.quality.avg_response_sec for c in done if c.quality.avg_response_sec is not None]
     out["avg_response_sec"] = round(sum(resp) / len(resp), 2) if resp else None
     out["tonality"] = dict(Counter(c.quality.tonality for c in done))
+    out["rude_calls"] = sum(1 for c in done if any(ch.get("id") == "no_rudeness" for ch in failed_checks(c)))
     return out
 
 

@@ -78,7 +78,7 @@ def test_every_api_route_is_covered():
         ("GET", "/api/auth/me"), ("POST", "/api/auth/logout"), ("POST", "/api/auth/password"),
         ("GET", "/api/calls"), ("GET", "/api/calls/{call_id}"), ("GET", "/api/calls/{call_id}/audio"),
         ("GET", "/api/queue"), ("GET", "/api/operators"), ("GET", "/api/script"), ("GET", "/api/dashboard"),
-        ("GET", "/api/operators/compare"),
+        ("GET", "/api/operators/compare"), ("GET", "/api/operators/compare.xlsx"),
     }
     analyst_up = {("POST", "/api/calls/upload")}
     listed = {(m, p) for m, p, _ in ADMIN_ONLY + NOT_OPERATOR}
