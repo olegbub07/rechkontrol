@@ -13,6 +13,7 @@ from app.crypto import decrypt_file
 from app.db import SessionLocal, write_lock
 from app.diarize import from_whisper
 from app.models import Call, Quality, Transcript
+from app.llm import enrich as llm_enrich
 from app.quality import analyze, report_to_json
 from app.security import safe_audio_path, safe_tmp_path
 from app.settings_store import load_script
@@ -109,6 +110,7 @@ def process_call(call_id: int) -> None:
         )
         del audio, stereo
         report = analyze(turns, company_phrases=company, extra_script_phrases=extra)
+        report = llm_enrich(report, turns)
         full_text = " ".join(t["text"] for t in turns).strip()
         payload = report_to_json(report)
         with write_lock, SessionLocal() as session:

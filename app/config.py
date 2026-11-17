@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # Стерео-записи: роли по громкости каналов (auto | left | right - канал оператора).
     stereo_diarization: bool = True
     stereo_operator_channel: str = "auto"
+    # Необязательная оценка локальной LLM: none | ollama. При ошибке - только правила.
+    llm_provider: str = "none"
+    llm_model: str = "qwen2.5:7b-instruct"
+    ollama_url: str = "http://127.0.0.1:11434"
+    llm_timeout_sec: float = 120.0
+    llm_weight: float = 0.5
+    # Разрешить нелокальный OLLAMA_URL (текст звонка уйдёт с машины). По умолчанию запрещено.
+    llm_allow_remote: bool = False
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0

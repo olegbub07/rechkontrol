@@ -1,0 +1,148 @@
+"""Необязательная оценка звонка локальной LLM через Ollama.
+
+Включается LLM_PROVIDER=ollama. Модель получает расшифровку с ролями (ПДн замаскированы)
+и итог правил, отвечает JSON с четырьмя оценками 0-100, рекомендациями и кратким итогом.
+Любая ошибка (Ollama не запущена, таймаут, кривой JSON) - звонок оценивается только правилами.
+Адрес Ollama по умолчанию разрешён только локальный: текст звонка не уходит с машины.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import logging
+from urllib.parse import urlparse
+
+from app.config import settings
+from app.pii import mask_text
+from app.quality import CheckResult, QualityReport, _clip
+
+log = logging.getLogger("rechkontrol.llm")
+
+METRICS = ("politeness", "completeness", "script_compliance", "resolution")
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+MAX_CHARS = 12000
+
+SYSTEM_PROMPT = (
+    "Ты эксперт по контролю качества контакт-центра банка. Оцени работу ОПЕРАТОРА по расшифровке. "
+    "Отвечай только JSON без пояснений вида: "
+    '{"politeness": 0-100, "completeness": 0-100, "script_compliance": 0-100, "resolution": 0-100, '
+    '"recommendations": ["до 4 конкретных советов оператору"], "summary": "1-2 предложения"}. '
+    "politeness - вежливость и эмпатия; completeness - полнота и точность ответов клиенту; "
+    "script_compliance - приветствие, представление, название банка, уточнение запроса, прощание; "
+    "resolution - решён ли вопрос клиента или назначен понятный следующий шаг. Пиши по-русски."
+)
+
+
+def enabled() -> bool:
+    return (settings.llm_provider or "").strip().lower() == "ollama"
+
+
+def _url_allowed(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    return parsed.hostname in LOCAL_HOSTS or settings.llm_allow_remote
+
+
+def build_prompt(turns: list[dict], report: QualityReport) -> str:
+    lines = []
+    for turn in turns:
+        who = "Оператор" if turn.get("role") == "operator" else "Клиент"
+        lines.append(f"{who}: {mask_text(str(turn.get('text') or ''))}")
+    dialog = "\n".join(lines)
+    if len(dialog) > MAX_CHARS:
+        dialog = dialog[: MAX_CHARS // 2] + "\n…\n" + dialog[-MAX_CHARS // 2 :]
+    hints = ", ".join(f"{m}={getattr(report, m)}" for m in METRICS)
+    return f"Оценки по правилам (для сравнения, можно не соглашаться): {hints}.\n\nРасшифровка:\n{dialog}"
+
+
+def parse_answer(text: str) -> dict | None:
+    try:
+        data = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        start, end = (text or "").find("{"), (text or "").rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            data = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    out: dict = {}
+    for metric in METRICS:
+        try:
+            out[metric] = _clip(float(data[metric]))
+        except (KeyError, TypeError, ValueError):
+            return None
+    recs = data.get("recommendations") or []
+    out["recommendations"] = [str(r).strip()[:300] for r in recs if str(r).strip()][:4] if isinstance(recs, list) else []
+    out["summary"] = str(data.get("summary") or "").strip()[:600]
+    return out
+
+
+def ask_ollama(prompt: str) -> dict | None:
+    import httpx
+
+    base = settings.ollama_url.rstrip("/")
+    if not _url_allowed(base):
+        log.warning("OLLAMA_URL не локальный, LLM пропущена (LLM_ALLOW_REMOTE=false)")
+        return None
+    body = {
+        "model": settings.llm_model,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0},
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        response = httpx.post(f"{base}/api/chat", json=body, timeout=settings.llm_timeout_sec)
+        response.raise_for_status()
+        content = (response.json().get("message") or {}).get("content") or ""
+    except Exception as exc:
+        log.warning("Ollama недоступна, оценка только правилами: %s", exc.__class__.__name__)
+        return None
+    return parse_answer(content)
+
+
+def blend(report: QualityReport, answer: dict) -> QualityReport:
+    """Смешивает оценки правил и LLM (вес LLM_WEIGHT) и добавляет советы модели."""
+    weight = max(0.0, min(1.0, float(settings.llm_weight)))
+    out = copy.deepcopy(report)
+    for metric in METRICS:
+        setattr(out, metric, _clip((1 - weight) * getattr(report, metric) + weight * answer[metric]))
+    base = 0.28 * report.politeness + 0.22 * report.completeness + 0.25 * report.script_compliance + 0.25 * report.resolution
+    penalty = (report.overall / base) if base > 0 and report.overall < _clip(base) - 0.5 else 1.0
+    out.overall = _clip(
+        (0.28 * out.politeness + 0.22 * out.completeness + 0.25 * out.script_compliance + 0.25 * out.resolution) * penalty
+    )
+    extra = [f"ИИ: {item}" for item in answer["recommendations"] if item not in out.recommendations]
+    out.recommendations = extra + list(out.recommendations)
+    if answer["summary"]:
+        out.summary = (out.summary + " Мнение модели: " + answer["summary"]).strip()
+    detail = ", ".join(f"{m}={answer[m]:.0f}" for m in METRICS)
+    out.checks = list(out.checks) + [
+        CheckResult(
+            id="llm_review",
+            title=f"Оценка локальной LLM ({settings.llm_model})",
+            category="llm",
+            passed=True,
+            score=100.0,
+            weight=0.0,
+            detail=f"Вес модели {weight:.0%}: {detail}",
+        )
+    ]
+    return out
+
+
+def enrich(report: QualityReport, turns: list[dict]) -> QualityReport:
+    if not enabled() or not turns:
+        return report
+    answer = ask_ollama(build_prompt(turns, report))
+    if answer is None:
+        return report
+    return blend(report, answer)
