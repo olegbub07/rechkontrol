@@ -386,9 +386,9 @@ def list_operators(session: Session = Depends(db_session), user: User = Depends(
 
 @router.post("/operators", response_model=OperatorOut)
 def create_operator(
-    body: OperatorIn, session: Session = Depends(db_session), user: User = Depends(current_user)
+    body: OperatorIn, request: Request, session: Session = Depends(db_session), user: User = Depends(require_admin)
 ) -> OperatorOut:
-    reject_operator(user)
+    """Новая карточка сотрудника - только администратор."""
     op = Operator(name=body.name.strip(), external_id=(body.external_id or "").strip() or None)
     session.add(op)
     try:
@@ -396,6 +396,7 @@ def create_operator(
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(409, "Оператор с таким внешним ID уже есть") from exc
+    write_audit(session, "operator.create", user=user, detail=f"{op.name} ({op.external_id or 'без ID'})", request=request)
     return OperatorOut(id=op.id, name=op.name, external_id=op.external_id)
 
 

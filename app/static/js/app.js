@@ -1064,18 +1064,20 @@ async function renderUpload(view) {
 async function renderOperators(view) {
   setNav("operators", "Операторы", "Сравнение качества по сотрудникам", "Команда");
   const ops = await api("/operators");
+  const canAdd = state.user?.role === "admin";
   view.innerHTML = `
     <div class="grid two">
       <div class="card featured"><h2>Рейтинг смены</h2>${operatorRank(ops)}</div>
-      <div class="card">
+      ${canAdd ? `<div class="card">
         <h2>Добавить оператора</h2>
         <form id="op-form">
           <label>Имя <input name="name" required maxlength="120" /></label>
           <label>Внешний ID <input name="external_id" maxlength="64" placeholder="OP-001" /></label>
           <button class="btn primary row" type="submit">Сохранить</button>
         </form>
-      </div>
+      </div>` : `<div class="card"><h2>Карточки сотрудников</h2><p class="muted">Новых операторов добавляет администратор.</p></div>`}
     </div>`;
+  if (!canAdd) return;
   $("#op-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
