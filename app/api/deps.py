@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
 
-from app.auth import decode_token
+from app.auth import decode_token, uses_public_bootstrap
 from app.db import SessionLocal
 from app.models import User
 
 bearer = HTTPBearer(auto_error=False)
+_BOOTSTRAP_OPEN = frozenset({"/api/auth/me", "/api/auth/password", "/api/auth/logout"})
 
 
 def db_session() -> Generator[Session, None, None]:
@@ -27,6 +28,7 @@ def db_session() -> Generator[Session, None, None]:
 
 
 def current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(bearer),
     session: Session = Depends(db_session),
 ) -> User:
@@ -36,8 +38,25 @@ def current_user(
         payload = decode_token(creds.credentials)
     except InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия истекла, войдите снова")
+    if payload.get("typ") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некорректный токен")
     username = payload.get("sub")
     user = session.query(User).filter(User.username == username).one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
+    if user.is_active == 0:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Учётная запись отключена")
+    if int(payload.get("ver") or 0) != int(user.token_version or 1):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия сброшена, войдите снова")
+    if uses_public_bootstrap(user) and request.url.path not in _BOOTSTRAP_OPEN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Смените стартовый пароль, прежде чем работать с записями",
+        )
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нужны права администратора")
     return user

@@ -14,7 +14,10 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(128))
-    role: Mapped[str] = mapped_column(String(24), default="admin")
+    role: Mapped[str] = mapped_column(String(24), default="analyst")
+    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    token_version: Mapped[int] = mapped_column(Integer, default=1)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -47,6 +50,8 @@ class Call(Base):
     is_demo: Mapped[int] = mapped_column(Integer, default=0)
     processed_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
     operator_first: Mapped[int] = mapped_column(Integer, default=1)
+    flagged: Mapped[int] = mapped_column(Integer, default=0)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     operator: Mapped[Operator | None] = relationship(back_populates="calls")
     transcript: Mapped[Transcript | None] = relationship(back_populates="call", uselist=False, cascade="all, delete-orphan")
@@ -93,3 +98,26 @@ class Setting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
+
+
+class SecurityMark(Base):
+    """Неудачные входы и отозванные сессии. Переживают перезапуск, пока не истечёт срок."""
+
+    __tablename__ = "security_marks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    subject: Mapped[str] = mapped_column(String(80), index=True)
+    created_at: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")

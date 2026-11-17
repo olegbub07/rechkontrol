@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api import api_router
-from app.auth import ensure_admin
+from app.auth import ensure_admin, restore_persisted_guards
 from app.config import settings
 from app.crypto import get_fernet, jwt_secret
-from app.db import SessionLocal, init_db
-from app.security import SecurityHeadersMiddleware, clean_tmp_dir
+from app.db import SessionLocal, init_db, protect_store
+from app.security import SecurityHeadersMiddleware, clean_tmp_dir, trusted_hosts
 from app.seed import seed_if_empty
 from app.transcribe import local_model_ready, model_loaded
 from app.worker import start_workers, stop_workers
@@ -24,17 +29,33 @@ log = logging.getLogger("rechkontrol")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+def _warm_model() -> None:
+    try:
+        from app.transcribe import load_model
+
+        load_model()
+        log.info("Модель Whisper прогрета")
+    except Exception:
+        log.exception("Не удалось прогреть модель Whisper")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
     get_fernet()
     jwt_secret()
+    protect_store()
     clean_tmp_dir()
     with SessionLocal() as session:
         ensure_admin(session)
         seed_if_empty(session)
         session.commit()
+    restore_persisted_guards()
     start_workers()
+    if settings.admin_password == "CenterInvest2026!":
+        log.warning("Стартовый пароль администратора опубликован в документации. Смените его после входа.")
+    if local_model_ready():
+        threading.Thread(target=_warm_model, name="whisper-warm", daemon=True).start()
     log.info("РечьКонтроль listening on http://%s:%s", settings.app_host, settings.app_port)
     try:
         yield
@@ -53,7 +74,18 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.app_debug else None,
 )
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts())
 app.include_router(api_router, prefix="/api")
+
+
+@app.exception_handler(Exception)
+async def unhandled(request: Request, exc: Exception):
+    if isinstance(exc, RequestValidationError):
+        return await request_validation_exception_handler(request, exc)
+    if isinstance(exc, StarletteHTTPException):
+        return await http_exception_handler(request, exc)
+    log.exception("unhandled error: %s", exc.__class__.__name__)
+    return JSONResponse(status_code=500, content={"detail": "Внутренняя ошибка. Подробности в журнале сервера."})
 
 
 @app.get("/api/health")
@@ -80,4 +112,4 @@ if STATIC_DIR.exists():
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
