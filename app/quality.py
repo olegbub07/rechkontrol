@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
-from app.checklist import RUDE_PENALTY, by_id, default_checklist
+from app.checklist import BOUNCE_PENALTY, RUDE_PENALTY, by_id, default_checklist
 from app.diarize import normalize
 
 GREETINGS = (
@@ -201,6 +201,27 @@ NEG_WORDS = (
     "никто не",
     "достали",
     "раздраж",
+)
+# Явное раздражение клиента. Одного такого слова достаточно, чтобы звонок не считался нейтральным.
+CLIENT_ANGER = (
+    "возмущ",
+    "обман",
+    "безобраз",
+    "издева",
+    "кошмар",
+    "позор",
+    "отвратитель",
+    "хамство",
+    "никто не говорил",
+    "никто ничего",
+    "буду жаловаться",
+    "напишу жалобу",
+    "верните деньги",
+    "сколько можно",
+    "в который раз",
+    "надоело",
+    "достали",
+    "недовол",
 )
 TOPIC_CUES = (
     ("расчётный счёт", "открытие расчётного счёта"),
@@ -419,6 +440,12 @@ def _topic(text: str) -> str:
 def _tonality(op_text: str, client_text: str, rude: bool) -> tuple[str, float]:
     if rude:
         return "negative", -0.7
+    anger = _count(client_text, CLIENT_ANGER)
+    if anger:
+        # Злой клиент: вежливость оператора не делает разговор позитивным.
+        score = -0.2 - 0.1 * (anger - 1) + 0.03 * _count(client_text, CLIENT_OK)
+        score = max(-1.0, min(-0.18, score))
+        return "negative", round(score, 3)
     score = 0.0
     score += 0.12 * _count(op_text, POS_WORDS)
     score -= 0.08 * _count(op_text, NEG_WORDS)
@@ -813,6 +840,10 @@ def analyze(
     overall = _clip(sum(float(cw.get(k, 0)) * v for k, v in parts.items()) / total_w)
     if rude_hit:
         overall = _clip(overall * RUDE_PENALTY)
+    # Отфутболивание: «всё на сайте», «менеджер скажет», а вопросы клиента так и не закрыты.
+    bounced = bool(bounce) and on("no_hanging") and answer_ratio < 0.8
+    if bounced:
+        overall = _clip(overall * BOUNCE_PENALTY)
 
     violations = [
         {"id": c.id, "title": c.title, "detail": c.detail, "category": c.category}
