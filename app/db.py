@@ -43,9 +43,19 @@ def database_url() -> str:
 def _warn_if_remote(url: str) -> None:
     from sqlalchemy.engine import make_url
 
-    host = make_url(url).host or ""
-    if host and host not in {"127.0.0.1", "localhost", "::1"} and not host.startswith("/"):
-        log.warning("База данных на другом хосте (%s): расшифровки уходят с этой машины по сети", host)
+    parsed = make_url(url)
+    host = parsed.host or ""
+    if not host or host in {"127.0.0.1", "localhost", "::1"} or host.startswith("/"):
+        return
+    sslmode = str(parsed.query.get("sslmode") or "")
+    if sslmode in {"require", "verify-ca", "verify-full"}:
+        log.info("База данных на хосте %s, соединение с TLS (sslmode=%s)", host, sslmode)
+    else:
+        log.warning(
+            "База данных на хосте %s без sslmode=require: если это другая машина, а не контейнер рядом, "
+            "расшифровки идут по сети открытым текстом",
+            host,
+        )
 
 
 DATABASE_URL = database_url()

@@ -1,7 +1,8 @@
 # РечьКонтроль + PostgreSQL 17.
 #   1. В .env задайте POSTGRES_PASSWORD (только буквы и цифры, например: openssl rand -hex 24).
 #   2. docker compose up -d --build
-#   3. Стартовые пароли кабинета: docker compose logs app  (или ./data/initial_credentials.txt)
+#   3. Стартовые пароли кабинета: docker compose logs app
+#      или docker compose exec app cat data/initial_credentials.txt
 # Оба порта открыты только на 127.0.0.1 этой машины.
 
 services:
@@ -31,15 +32,19 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://rechkontrol:${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}@db:5432/rechkontrol
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
-      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float32}
       PII_MASKING: ${PII_MASKING:-true}
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
     volumes:
-      # ключ шифрования аудио, JWT-секрет, аудио, модели Whisper и стартовые пароли
-      - ./data:/app/data
+      # ключ шифрования аудио, JWT-секрет, аудио, модели Whisper и стартовые пароли.
+      # Именованный том, а не ./data: каталог ./data Docker создал бы от root,
+      # и приложение (uid 1000) не смогло бы в него писать.
+      - appdata:/app/data
     ports:
       - "127.0.0.1:8080:8080"
 
 volumes:
   pgdata:
+    driver: local
+  appdata:
     driver: local

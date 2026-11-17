@@ -152,9 +152,9 @@ DATABASE_URL=postgresql+psycopg://rechkontrol:ПАРОЛЬ@127.0.0.1:5432/rechko
 
 1. В `.env`: `POSTGRES_PASSWORD=...` (только буквы и цифры, например `openssl rand -hex 24`: пароль подставляется в URL).
 2. `docker compose up -d --build`
-3. Стартовые пароли кабинета: `docker compose logs app` или `data/initial_credentials.txt`.
+3. Стартовые пароли кабинета: `docker compose logs app` или `docker compose exec app cat data/initial_credentials.txt`.
 
-Оба порта публикуются только на `127.0.0.1` (5432 и 8080). Данные PostgreSQL лежат в томе `pgdata`, ключи и аудио приложения - в `./data` (контейнер работает от uid 1000, папке нужны права на запись для него).
+Оба порта публикуются только на `127.0.0.1` (5432 и 8080). Данные PostgreSQL лежат в томе `pgdata`, ключи, аудио, модели Whisper и стартовые пароли приложения - в томе `appdata` (`/app/data` в контейнере). Bind-mount `./data` не используется: Docker создаёт такую папку от root, и приложение (uid 1000) не может в неё писать. Первый звонок после старта ждёт скачивания модели Whisper в этот том (около 150 МБ для `base`).
 
 ### Тесты против PostgreSQL
 
