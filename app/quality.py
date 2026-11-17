@@ -288,6 +288,24 @@ def _has(text: str, phrases: tuple[str, ...] | list[str]) -> str | None:
     return None
 
 
+# Мат ловим по корням, а не списком фраз: форм слишком много.
+_PROFANITY_RE = re.compile(
+    r"(?<![а-яё])(?:"
+    r"(?:на|по|от|за|ни|до)?ху[йеёяюи][а-яё]*"
+    r"|(?:[а-яё]{0,4})?пизд[а-яё]*"
+    r"|(?:за|вы|до|на|об|отъ?|подъ?|по|разъ?|съ?|у|въ?|при|про|пере)?(?:еб|ёб)(?:а|у|л|н|ё|и|ок|ыв)[а-яё]*"
+    r"|бля[а-яё]*|бл[яе]д[а-яё]*"
+    r"|сук[аиеуо]|сучк[а-яё]*"
+    r"|муда[кч][а-яё]*|пид[ао]р[а-яё]*|долбо[её]б[а-яё]*|гандон[а-яё]*|залуп[а-яё]*|манд[ау](?![рт])[а-яё]*"
+    r")(?![а-яё])"
+)
+
+
+def _profanity(text: str) -> str | None:
+    m = _PROFANITY_RE.search(text)
+    return m.group(0) if m else None
+
+
 def _count(text: str, phrases: tuple[str, ...] | list[str]) -> int:
     return sum(text.count(p) for p in phrases)
 
@@ -524,7 +542,7 @@ def analyze(
     answered_n = sum(1 for q in questions if _answered(q, turns))
     answer_ratio = 1.0 if not questions else answered_n / len(questions)
     op_avg_len = (sum(len(t["text"]) for t in op_turns) / len(op_turns)) if op_turns else 0
-    rude_hit = _has(op_text, ph("no_rudeness")) if on("no_rudeness") else None
+    rude_hit = (_profanity(op_text) or _has(op_text, ph("no_rudeness"))) if on("no_rudeness") else None
     ty_hit = bool(TY_RE.search(" " + op_text + " "))
     courtesy_n = _count(op_text, ph("courtesy"))
     greet_hit = _has(op_text[:220] if op_text else "", ph("greeting")) or (
@@ -646,7 +664,7 @@ def analyze(
         0 if rude_hit else 100,
         1.6,
         f"Обнаружена резкая формулировка: «{rude_hit}»." if rude_hit else "Грубых формулировок нет.",
-        _evidence(turns, ph("no_rudeness")) if rude_hit else None,
+        _evidence(turns, [rude_hit]) if rude_hit else None,
     )
     add(
         "no_tutoyage",
