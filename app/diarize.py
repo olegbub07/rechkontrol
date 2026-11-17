@@ -382,6 +382,38 @@ VOICE_MIN_BIC = 8.0  # насколько два голоса объясняют
 _SENT_END = re.compile(r"[.?!…]$")
 
 
+def _quiet_frames(audio: np.ndarray, sr: int) -> tuple[np.ndarray, float]:
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    frame = max(1, int(sr * 0.02))
+    n = (len(audio) // frame) * frame
+    if n == 0:
+        return np.zeros(0, dtype=bool), 0.02
+    rms = np.sqrt((audio[:n].reshape(-1, frame) ** 2).mean(axis=1) + 1e-12)
+    return rms < max(1e-4, float(np.percentile(rms, 90)) * 0.06), frame / float(sr)
+
+
+def annotate_pauses(turns: list[dict], audio: np.ndarray | None, sr: int | None, stretch: float = 0.3) -> list[dict]:
+    """Для каждой смены говорящего пишет pause_before: самую длинную тишину в аудио между репликами.
+
+    Окно расширено на stretch секунд в обе стороны: Whisper растягивает крайние слова
+    на паузу, и по таймстемпам пауза выглядит почти нулевой, хотя в звуке она есть."""
+    if audio is None or not sr or len(turns) < 2:
+        return turns
+    quiet, step = _quiet_frames(audio, sr)
+    if len(quiet) == 0:
+        return turns
+    for prev, cur in zip(turns, turns[1:]):
+        a = max(0, int((float(prev["end"]) - stretch) / step))
+        b = min(len(quiet), int((float(cur["start"]) + stretch) / step) + 1)
+        best = run = 0
+        for q in quiet[a:b]:
+            run = run + 1 if q else 0
+            best = max(best, run)
+        cur["pause_before"] = round(best * step, 2)
+    return turns
+
+
 def _silences(audio: np.ndarray, sr: int, min_len: float = 0.25) -> list[float]:
     """Середины пауз от min_len секунд (по энергии, кадр 20 мс)."""
     if audio.ndim > 1:
@@ -585,15 +617,15 @@ def from_whisper(
             ]
         result = roles_from_channels(by_channel, stereo, stereo_sr, operator_first, operator_channel)
         if result:
-            return result
+            return annotate_pauses(result, audio, sr)
     if words and audio is not None and sr:
         voiced = voice_turns(words, audio, sr, operator_first=operator_first)
         if voiced:
-            return voiced
+            return annotate_pauses(voiced, audio, sr)
     regions = speech_regions(audio, sr) if audio is not None and sr else None
     if words:
         turns = utterances_from_words(words, regions)
     else:
         turns = merge_whisper_segments(raw_segments)
         turns = [{"start": t["start"], "end": t["end"], "text": correct_asr_text(t["text"])} for t in turns]
-    return classify_turns(turns, operator_first=operator_first)
+    return annotate_pauses(classify_turns(turns, operator_first=operator_first), audio, sr)

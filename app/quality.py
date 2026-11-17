@@ -356,11 +356,26 @@ def _avg_response(turns: list[dict]) -> tuple[float | None, int]:
             gap = float(cur["start"]) - float(prev["end"])
             if 0 <= gap < 45:
                 gaps.append(gap)
-            if -0.05 <= gap <= 0.18 and len(prev.get("text", "")) > 24:
+            if _is_interrupt(prev, cur, gap):
                 interrupts += 1
     if not gaps:
         return None, interrupts
     return round(sum(gaps) / len(gaps), 2), interrupts
+
+
+OVERLAP_SEC = 0.3  # перекрытие реплик по таймстемпам, которое точно не растяжка слов
+NO_PAUSE_SEC = 0.12  # в аудио между репликами тишины меньше этого - ответ «внахлёст»
+
+
+def _is_interrupt(prev: dict, cur: dict, gap: float) -> bool:
+    if gap <= -OVERLAP_SEC:
+        return True
+    pause = cur.get("pause_before")
+    if pause is None:
+        # Нет звука (старые записи, ручная разметка): по коротким зазорам не судим,
+        # Whisper растягивает слова и 0,1-0,2 с между репликами - норма.
+        return False
+    return gap <= 0.18 and float(pause) < NO_PAUSE_SEC and len(prev.get("text", "")) > 24
 
 
 def _talk_ratio(turns: list[dict]) -> float:
