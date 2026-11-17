@@ -19,6 +19,14 @@ _DDL_RE = re.compile(r"^[A-Za-z0-9 ()]+$")
 _BLOCKED_PRAGMAS = frozenset({"writable_schema"})
 _BLOCKED_FUNCTIONS = frozenset({"load_extension", "readfile", "writefile", "edit", "fts3_tokenizer"})
 
+def ensure_dirs() -> None:
+    """Каталоги данных создаются до первого соединения: на свежем клоне data/ ещё нет."""
+    for path in (settings.data_dir, settings.audio_dir, settings.tmp_dir, settings.models_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+ensure_dirs()
+
 _connect_args = {"check_same_thread": False}
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
@@ -90,10 +98,7 @@ def _on_connect(dbapi_connection, _connection_record) -> None:
 
 
 def init_db() -> None:
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    settings.audio_dir.mkdir(parents=True, exist_ok=True)
-    settings.tmp_dir.mkdir(parents=True, exist_ok=True)
-    settings.models_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dirs()
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
