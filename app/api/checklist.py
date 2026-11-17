@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.access import reject_operator
 from app.api.deps import current_user, db_session, require_admin
+from app.asr_clean import clean_turns
 from app.audit import write_audit
 from app.checklist import (
     CATEGORIES,
@@ -103,6 +104,11 @@ def rescore_calls(request: Request, session: Session = Depends(db_session), user
                 turns = json.loads(call.transcript.segments_json or "[]")
             except json.JSONDecodeError:
                 continue
+            turns, cleaned = clean_turns(turns)
+            if cleaned:
+                # старые расшифровки чистим от галлюцинаций Whisper тем же фильтром, что и новые
+                call.transcript.segments_json = json.dumps(turns, ensure_ascii=False)
+                call.transcript.full_text = " ".join(str(t.get("text") or "") for t in turns).strip()
             report = analyze(turns, script["company_phrases"], script["extra_script_phrases"], script["checklist"])
             q = call.quality
             for key in (

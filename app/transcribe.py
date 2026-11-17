@@ -11,6 +11,7 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import numpy as np
 import soundfile as sf
 
+from app.asr_clean import align_words, clean_text, is_hallucination
 from app.asr_fix import correct_asr_text
 from app.config import settings
 
@@ -172,8 +173,17 @@ def transcribe_wav(
             token = (word.word or "").strip()
             if token:
                 words.append({"start": float(word.start), "end": float(word.end), "text": token})
-        text = correct_asr_text((seg.text or "").strip())
-        if not text and not words:
+        if is_hallucination(
+            getattr(seg, "no_speech_prob", None),
+            getattr(seg, "avg_logprob", None),
+            getattr(seg, "compression_ratio", None),
+        ):
+            continue
+        original = correct_asr_text((seg.text or "").strip())
+        text = clean_text(original)
+        if text != original:
+            words = align_words(words, text)
+        if not text:
             continue
         raw.append(
             {
