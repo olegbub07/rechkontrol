@@ -132,7 +132,11 @@ def _fmt(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def _number(value, label: str) -> float:
+CRITERION_DIGITS = 1  # вес критерия задаётся с шагом 0,1 (как значения по умолчанию: 1,2; 0,9)
+CATEGORY_DIGITS = 3  # доля метрики - до тысячных, столько же даёт приведение к сумме 1
+
+
+def _number(value, label: str, digits: int = 2) -> float:
     """Число из формы: пустое поле, буквы, NaN и логические значения - ошибка, а не 0."""
     if isinstance(value, bool) or value is None:
         raise ChecklistError(f"{label}: укажите число")
@@ -147,7 +151,11 @@ def _number(value, label: str) -> float:
         raise ChecklistError(f"{label}: «{str(value)[:20]}» не число") from exc
     if num != num or num in (float("inf"), float("-inf")):
         raise ChecklistError(f"{label}: укажите обычное число")
-    return round(num, 2)
+    scaled = num * 10**digits
+    if abs(scaled - round(scaled)) > 1e-6:
+        rule = {0: "только целое число", 1: "один знак после запятой (шаг 0,1)", 2: "до двух знаков после запятой (шаг 0,01)", 3: "до трёх знаков после запятой (шаг 0,001)"}[digits]
+        raise ChecklistError(f"{label}: допускается {rule}, сейчас {_fmt(num)}")
+    return round(num, digits)
 
 
 def normalize_weights(weights: dict[str, float]) -> dict[str, float]:
@@ -188,7 +196,7 @@ def validate(payload: dict) -> dict:
         enabled = item.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ChecklistError(f"«{title}»: признак «включён» должен быть да или нет")
-        weight = _number(item["weight"] if "weight" in item else base["weight"], f"«{title}»: вес")
+        weight = _number(item["weight"] if "weight" in item else base["weight"], f"«{title}»: вес", CRITERION_DIGITS)
         if not LIMITS["weight_min"] <= weight <= LIMITS["weight_max"]:
             raise ChecklistError(f"«{title}»: вес должен быть от 0 до 5, сейчас {_fmt(weight)}")
         if enabled and weight <= 0:
@@ -230,7 +238,7 @@ def validate(payload: dict) -> dict:
     for cat, label in CATEGORIES.items():
         if cat not in weights_in:
             raise ChecklistError(f"Не указан вес метрики «{label}»")
-        w = _number(weights_in[cat], f"Вес метрики «{label}»")
+        w = _number(weights_in[cat], f"Вес метрики «{label}»", CATEGORY_DIGITS)
         if not 0 < w <= 1:
             raise ChecklistError(f"Вес метрики «{label}» должен быть больше 0 и не больше 1, сейчас {_fmt(w)}")
         weights[cat] = w

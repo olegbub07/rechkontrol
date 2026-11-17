@@ -53,6 +53,9 @@ def test_disable_weight_and_phrases_change_scoring():
         (lambda cl: _crit(cl, "greeting").update(weight=99999), "от 0 до 5"),
         (lambda cl: _crit(cl, "greeting").update(weight=-1), "от 0 до 5"),
         (lambda cl: _crit(cl, "greeting").update(weight=""), "пустое"),
+        (lambda cl: _crit(cl, "greeting").update(weight=2.55), "один знак после запятой"),
+        (lambda cl: _crit(cl, "greeting").update(weight="2,55"), "шаг 0,1"),
+        (lambda cl: cl["category_weights"].update(script=0.2555), "до трёх знаков"),
         (lambda cl: _crit(cl, "greeting").update(weight=None), "укажите число"),
         (lambda cl: _crit(cl, "greeting").update(weight="abc"), "не число"),
         (lambda cl: _crit(cl, "greeting").update(weight=0), "снимите галочку"),
@@ -129,3 +132,13 @@ def test_checklist_api_roles_audit_and_rescore():
         assert client.post("/api/checklist/reset", headers=admin).status_code == 200
         assert client.get("/api/checklist", headers=admin).json()["checklist"] == default_checklist()
         assert client.post("/api/checklist/rescore", headers=admin).status_code == 200
+
+
+def test_weight_precision_accepts_step():
+    from app.checklist import default_checklist, validate
+
+    cl = default_checklist()
+    _crit(cl, "greeting")["weight"] = "2,50"
+    cl["category_weights"]["script"] = 0.571
+    out = validate(cl)
+    assert _crit(out, "greeting")["weight"] == 2.5

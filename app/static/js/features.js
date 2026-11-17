@@ -18,6 +18,7 @@ const FEATURE_AUDIT_RU = {
   "call.unmask": "просмотр без маскирования",
   "report.operator": "PDF-отчёт по оператору",
   "operator.create": "добавлен оператор",
+  "export.xlsx": "экспорт Excel",
   "call.operator": "назначен оператор звонка",
 };
 
@@ -65,7 +66,7 @@ async function mountChecklistEditor(view) {
       <p class="eyebrow">Оценка звонка</p>
       <h2>Чек-лист качества</h2>
       <p class="muted">Критерии, их вес внутри метрики, ключевые фразы и вес метрик в итоговой оценке. По умолчанию — встроенные правила. Изменения действуют для новых звонков; уже оценённые можно пересчитать кнопкой ниже (без повторной расшифровки, оценка LLM при пересчёте не повторяется).</p>
-      <p class="muted">Вес критерия - от 0 до 5, у включённого больше 0. Доля метрики - от 0 до 1; при сохранении доли приводятся к сумме 1 (например, 1, 1, 1, 1 станет по 0,25). Сейчас сумма долей: <b id="cl-sum">${Object.values(cl.category_weights).reduce((a, b) => a + Number(b), 0).toFixed(2).replace(".", ",")}</b>.</p>
+      <p class="muted">Вес критерия - от 0 до 5 с шагом 0,1 (например, 1,2), у включённого больше 0. Доля метрики - от 0 до 1, до трёх знаков после запятой; при сохранении доли приводятся к сумме 1 (например, 1, 1, 1, 1 станет по 0,25). Сейчас сумма долей: <b id="cl-sum">${Object.values(cl.category_weights).reduce((a, b) => a + Number(b), 0).toFixed(2).replace(".", ",")}</b>.</p>
       <form id="cl-form" novalidate>${groups}
         <div class="toolbar mt">
           <button class="btn primary row" type="submit">Сохранить чек-лист</button>
@@ -98,11 +99,13 @@ async function mountChecklistEditor(view) {
       err.hidden = true;
       form.querySelectorAll(".cl-bad").forEach((el) => el.classList.remove("cl-bad"));
       const problems = [];
-      const check = (el, label, min, max, positive) => {
+      const check = (el, label, min, max, positive, digits) => {
         const v = clNumber(el.value);
+        const frac = (el.value.trim().replace(",", ".").split(".")[1] || "").replace(/0+$/, "").length;
         let msg = "";
         if (el.value.trim() === "") msg = `${label}: поле пустое, укажите число`;
         else if (v === null) msg = `${label}: «${el.value.trim().slice(0, 20)}» не число`;
+        else if (frac > digits) msg = `${label}: допускается ${digits === 1 ? "один знак после запятой (шаг 0,1)" : "до трёх знаков после запятой (шаг 0,001)"}`;
         else if (v < min || v > max) msg = `${label}: допустимо от ${String(min).replace(".", ",")} до ${String(max).replace(".", ",")}`;
         else if (positive && v <= 0) msg = `${label}: должно быть больше 0`;
         if (msg) { el.classList.add("cl-bad"); problems.push(msg); }
@@ -112,7 +115,7 @@ async function mountChecklistEditor(view) {
         const enabled = row.querySelector("[data-f=enabled]").checked;
         const wEl = row.querySelector("[data-f=weight]");
         const title = row.querySelector("[data-f=title]").value.trim();
-        check(wEl, `«${title || c.title}», вес`, 0, 5, enabled);
+        check(wEl, `«${title || c.title}», вес`, 0, 5, enabled, 1);
         const out = { id: c.id, enabled, title, weight: wEl.value.trim() };
         const ta = row.querySelector("[data-f=phrases]");
         if (ta) out.phrases = ta.value.split(/\n+/).map((x) => x.trim()).filter(Boolean);
@@ -120,7 +123,7 @@ async function mountChecklistEditor(view) {
       });
       const weights = {};
       form.querySelectorAll("input[data-cat]").forEach((el) => {
-        check(el, `Доля метрики «${data.categories[el.dataset.cat]}»`, 0, 1, true);
+        check(el, `Доля метрики «${data.categories[el.dataset.cat]}»`, 0, 1, true, 3);
         weights[el.dataset.cat] = el.value.trim();
       });
       if (problems.length) {
