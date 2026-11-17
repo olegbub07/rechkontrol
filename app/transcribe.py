@@ -20,8 +20,9 @@ _batch_pipe = None
 _model_lock = threading.Lock()
 ProgressCb = Callable[[int], None]
 BANK_PROMPT = (
-    "Добрый день, банк Центр-инвест. Оператор и клиент. "
-    "Расчётный счёт, ИНН, ЕГРИП, заявка, номер обращения."
+    "Добрый день, банк Центр-инвест, оператор слушает. "
+    "Карта, вклад, кредит, ипотека, кэшбэк, перевод по СБП, мобильный банк, онлайн-банк, "
+    "блокировка карты, кодовое слово, расчётный счёт, ИНН, ЕГРИП, заявка, номер обращения."
 )
 
 
@@ -86,7 +87,7 @@ def decode_profile(duration: float | None) -> dict:
         "beam_size": 1 if case_sla else configured_beam,
         "batch_size": batch if long_audio else 1,
         "word_timestamps": True,  # нужны для разделения по голосу; на 10 мин +~18% времени
-        "initial_prompt": None if long_audio else BANK_PROMPT,
+        "initial_prompt": BANK_PROMPT,
     }
 
 
