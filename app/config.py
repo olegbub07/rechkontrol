@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0
+    # Часовой пояс для показа времени в журнале аудита (в базе время хранится в UTC).
+    display_tz: str = "Europe/Moscow"
     allowed_audio_ext: tuple[str, ...] = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a")
 
     @property

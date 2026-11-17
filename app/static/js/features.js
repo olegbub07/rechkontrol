@@ -17,6 +17,8 @@ const FEATURE_AUDIT_RU = {
   "checklist.rescore": "пересчёт оценок",
   "call.unmask": "просмотр без маскирования",
   "report.operator": "PDF-отчёт по оператору",
+  "operator.create": "добавлен оператор",
+  "call.operator": "назначен оператор звонка",
 };
 
 function registerFeatureAudit() {
@@ -242,10 +244,19 @@ function fmtWeek(iso) {
 }
 
 function deltaBadge(d) {
-  if (d == null) return `<span class="muted" title="Нужны оценки минимум за две недели">—</span>`;
+  if (d == null) return `<span class="muted" title="Нужны две недели, в каждой хотя бы по 2 оценённых звонка">—</span>`;
   const cls = d > 0.4 ? "up" : d < -0.4 ? "down" : "flat";
   const sign = d > 0 ? "+" : "";
-  return `<span class="delta ${cls}" title="Последняя неделя с оценками к предыдущей">${d > 0.4 ? "▲" : d < -0.4 ? "▼" : "■"} ${sign}${d.toFixed(1)}</span>`;
+  return `<span class="delta ${cls}" title="Последняя неделя к предыдущей (недели, где не меньше 2 звонков)">${d > 0.4 ? "▲" : d < -0.4 ? "▼" : "■"} ${sign}${d.toFixed(1)}</span>`;
+}
+
+function compareRangeNote(data) {
+  if (!data.data_from) return "";
+  const from = fmtWeek(data.data_from);
+  const to = fmtWeek(data.data_to);
+  const spanDays = Math.round((new Date(data.data_to) - new Date(data.data_from)) / 86400000) + 1;
+  const short = !data.period_days || spanDays < data.period_days;
+  return ` Оценённые звонки есть с ${from} по ${to}${short && data.period !== "7d" ? " - поэтому «30 дней» и «всё время» могут показывать одинаковые цифры" : ""}.`;
 }
 
 function mistakeChips(list) {
@@ -279,7 +290,8 @@ async function mountOperatorCompare(view) {
   const team = data.team;
   card.innerHTML = `
     <h2>${self ? "Моя динамика" : "Сравнение операторов"}</h2>
-    <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} Период как у дашборда.</p>
+    <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} Период как у дашборда.${compareRangeNote(data)}</p>
+    ${data.unassigned ? `<p class="muted cmp-note">Звонков без оператора за период: <b>${data.unassigned}</b>. Они входят в общие цифры дашборда, но не в рейтинг и PDF. Оператора можно назначить в карточке звонка или указать при загрузке (поле «Оператор» или код вида OP-104 в имени файла).</p>` : ""}
     ${rows ? `<div class="table-scroll cmp-scroll"><table class="cmp-table">
       <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th>Нарушения</th><th>Частые ошибки</th>${self ? "" : "<th></th>"}</tr></thead>
       <tbody>${rows}</tbody></table></div>` : `<p class="empty">Нет оценённых звонков с оператором за период</p>`}
@@ -366,5 +378,43 @@ function mountPdfReport(view, ops) {
     if (!form.operator_id.value) return;
     if (form.date_from.value > form.date_to.value) { toast("Начало периода позже конца", true); return; }
     downloadOperatorPdf(form.operator_id.value, form.date_from.value, form.date_to.value, form.querySelector("[type=submit]"));
+  };
+}
+
+/* ---------- Оператор звонка (звонки без оператора не попадают в рейтинг и PDF) ---------- */
+
+async function mountOperatorAssign(call) {
+  if (!state.user || state.user.role === "operator") return;
+  const anchor = $("#note-form");
+  if (!anchor) return;
+  let ops;
+  try {
+    ops = await api("/operators");
+  } catch {
+    return;
+  }
+  const box = document.createElement("form");
+  box.className = "op-assign mt";
+  box.noValidate = true;
+  const options = [`<option value="0">не указан</option>`]
+    .concat(ops.map((o) => `<option value="${o.id}" ${o.id === call.operator_id ? "selected" : ""}>${escapeHtml(o.name)}${o.external_id ? " (" + escapeHtml(o.external_id) + ")" : ""}</option>`))
+    .join("");
+  box.innerHTML = `
+    <label>Оператор звонка <select name="op">${options}</select></label>
+    <button class="btn ghost row" type="submit">Сохранить оператора</button>
+    ${call.operator_id ? "" : `<p class="muted">Без оператора звонок учитывается в общих цифрах, но не в рейтинге и PDF.</p>`}`;
+  anchor.parentNode.insertBefore(box, anchor.previousElementSibling || anchor);
+  box.onsubmit = async (e) => {
+    e.preventDefault();
+    const value = Number(box.querySelector("select").value);
+    try {
+      const saved = await api(`/calls/${call.id}`, { method: "PATCH", json: { operator_id: value } });
+      call.operator_id = saved.operator_id;
+      toast(saved.operator_name ? `Оператор: ${saved.operator_name}` : "Оператор снят");
+      const hint = box.querySelector("p");
+      if (hint) hint.hidden = !!saved.operator_id;
+    } catch (ex) {
+      toast(ex.message, true);
+    }
   };
 }

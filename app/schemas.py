@@ -246,6 +246,8 @@ class SettingsIn(BaseModel):
 class CallPatch(BaseModel):
     review_note: str | None = Field(default=None, max_length=2000)
     flagged: bool | None = None
+    # 0 - снять оператора, id - назначить (звонки без оператора не попадают в рейтинг и PDF)
+    operator_id: int | None = Field(default=None, ge=0)
 
 
 class AnalyzeTextIn(BaseModel):

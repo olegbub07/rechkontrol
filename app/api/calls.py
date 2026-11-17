@@ -12,7 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.timeutil import utcnow
+from app.timeutil import date_from_filename, operator_code_from_filename, utcnow
 from app.access import is_operator, limit_calls, reject_operator, require_call
 from app.api.deps import current_user, db_session, require_admin
 from app.api.serializers import call_detail, call_item, operator_out
@@ -143,7 +143,8 @@ def get_call(
     )
     require_call(call, user)
     if unmasked:
-        write_audit(session, "call.unmask", user=user, detail=str(call_id), request=request)
+        who = call.operator.name if call.operator else "оператор не указан"
+        write_audit(session, "call.unmask", user=user, detail=f"звонок №{call.id}: {call.orig_filename}, {who}", request=request)
     return call_detail(call, unmasked=unmasked, script=load_script(session))
 
 
@@ -216,12 +217,20 @@ async def upload_calls(
             path = settings.audio_dir / stored
             mime = await _store_encrypted(upload, path, max_bytes)
             stored_paths.append(path)
+            filename = sanitize_filename(upload.filename)
+            # Если дата и оператор не указаны в форме, берём их из имени файла (2026-11-07_..., OP-104).
+            file_when = None if call_at else date_from_filename(filename)
+            file_op = op
+            if file_op is None:
+                code = operator_code_from_filename(filename)
+                if code:
+                    file_op = session.query(Operator).filter(Operator.external_id == code).first()
             call = Call(
-                orig_filename=sanitize_filename(upload.filename),
+                orig_filename=filename,
                 stored_name=stored,
                 mime=mime,
-                operator_id=op.id if op else None,
-                call_at=when,
+                operator_id=file_op.id if file_op else None,
+                call_at=file_when or when,
                 status="queued",
                 progress=0,
                 is_demo=0,
@@ -230,7 +239,8 @@ async def upload_calls(
             session.add(call)
             session.flush()
             created.append(call)
-        write_audit(session, "call.upload", user=user, detail=f"{len(created)} файл(ов)", request=request)
+        names = ", ".join(c.orig_filename for c in created)
+        write_audit(session, "call.upload", user=user, detail=f"{len(created)} файл(ов): {names}"[:480], request=request)
         session.commit()
     except Exception:
         session.rollback()
@@ -323,7 +333,23 @@ def patch_call(
         call.review_note = body.review_note.strip()[:2000]
     if body.flagged is not None:
         call.flagged = 1 if body.flagged else 0
-    write_audit(session, "call.review", user=user, detail=str(call.id), request=request)
+    if body.operator_id is not None:
+        if body.operator_id == 0:
+            call.operator_id = None
+        else:
+            op = session.get(Operator, body.operator_id)
+            if op is None:
+                raise HTTPException(404, "Оператор не найден")
+            call.operator_id = op.id
+        session.flush()
+        session.refresh(call)
+        write_audit(
+            session, "call.operator", user=user,
+            detail=f"звонок №{call.id}: {call.operator.name if call.operator else 'оператор снят'}", request=request,
+        )
+    what = [w for w, v in (("заметка", body.review_note), ("пометка", body.flagged)) if v is not None]
+    if what:
+        write_audit(session, "call.review", user=user, detail=f"звонок №{call.id}: {', '.join(what)}", request=request)
     session.commit()
     session.refresh(call)
     return call_detail(call, script=load_script(session))

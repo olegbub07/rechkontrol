@@ -11,8 +11,10 @@ def test_week_start_is_monday():
 
 def test_trend_delta():
     assert trend_delta([]) is None
-    assert trend_delta([{"overall": 70.0}]) is None
-    assert trend_delta([{"overall": 70.0}, {"overall": 75.5}]) == 5.5
+    assert trend_delta([{"overall": 70.0, "count": 3}]) is None
+    assert trend_delta([{"overall": 70.0, "count": 2}, {"overall": 75.5, "count": 2}]) == 5.5
+    # неделя с одним звонком в сравнение не идёт
+    assert trend_delta([{"overall": 70.0, "count": 2}, {"overall": 99.0, "count": 1}]) is None
 
 
 def test_compare_roles_and_shape():

@@ -23,6 +23,7 @@ from app.schemas import (
     UserOut,
 )
 from app.security import password_gate
+from app.timeutil import display_zone, to_local
 
 router = APIRouter(tags=["admin"])
 
@@ -273,13 +274,19 @@ def audit_log(
     q = session.query(AuditLog)
     total = q.count()
     rows = q.order_by(AuditLog.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    def local(value) -> str:
+        when = to_local(value) if isinstance(value, datetime) else None
+        return when.strftime("%d.%m.%Y %H:%M:%S") if when else str(value or "")
+
     return {
         "total": total,
         "page": page,
+        "tz": str(display_zone()),
         "items": [
             {
                 "id": r.id,
-                "created_at": r.created_at.isoformat() if isinstance(r.created_at, datetime) else str(r.created_at),
+                "created_at": r.created_at.isoformat() + "Z" if isinstance(r.created_at, datetime) else str(r.created_at),
+                "created_at_local": local(r.created_at),
                 "username": r.username,
                 "action": r.action,
                 "detail": r.detail,

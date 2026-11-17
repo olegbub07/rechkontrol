@@ -9,8 +9,8 @@ def test_sniff_wav_mp3_ogg():
 
 
 def test_export_contains_case_kpi_fields():
-    for field in ("violation_pct", "avg_response_sec", "tonality", "datetime", "operator_id"):
+    for field in ("violation_pct", "avg_response_sec", "tonality_ru", "datetime", "operator_id"):
         assert field in CSV_FIELDS
     titles = [title for _, title in CSV_COLUMNS]
-    for title in ("Процент нарушений", "Среднее время ответа", "Тональность", "Дата и время", "Идентификатор оператора"):
+    for title in ("Процент нарушений", "Среднее время ответа, сек", "Тональность", "Дата и время", "Идентификатор оператора"):
         assert title in titles

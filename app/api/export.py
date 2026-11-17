@@ -17,6 +17,9 @@ from app.models import Call, User
 
 router = APIRouter(tags=["export"])
 
+TONALITY_RU = {"positive": "позитивная", "neutral": "нейтральная", "negative": "негативная"}
+STATUS_RU = {"queued": "в очереди", "processing": "обрабатывается", "done": "готово", "error": "ошибка"}
+
 CSV_COLUMNS = [
     ("call_id", "Идентификатор звонка"),
     ("datetime", "Дата и время"),
@@ -29,10 +32,10 @@ CSV_COLUMNS = [
     ("completeness", "Полнота ответа"),
     ("script_compliance", "Соблюдение скрипта"),
     ("resolution", "Решение проблемы"),
-    ("tonality", "Тональность"),
-    ("avg_response_sec", "Среднее время ответа"),
+    ("tonality_ru", "Тональность"),
+    ("avg_response_sec", "Среднее время ответа, сек"),
     ("violation_pct", "Процент нарушений"),
-    ("status", "Статус"),
+    ("status_ru", "Статус"),
 ]
 CSV_FIELDS = [key for key, _ in CSV_COLUMNS]
 
@@ -73,26 +76,44 @@ def csv_cell(value):
     return text
 
 
+def _round(value, digits: int = 1):
+    return round(float(value), digits) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
+
+
 def _flat(call: Call) -> dict:
     q = call.quality
     op = call.operator
+    tonality = q.tonality if q else ""
     return {
         "call_id": call.id,
         "datetime": call.call_at.isoformat(sep=" ", timespec="minutes"),
         "operator_id": (op.external_id or str(op.id)) if op else "",
         "operator_name": op.name if op else "",
         "filename": call.orig_filename,
-        "duration_sec": call.duration_sec,
+        "duration_sec": _round(call.duration_sec),
         "overall": q.overall if q else "",
         "politeness": q.politeness if q else "",
         "completeness": q.completeness if q else "",
         "script_compliance": q.script_compliance if q else "",
         "resolution": q.resolution if q else "",
-        "tonality": q.tonality if q else "",
-        "avg_response_sec": q.avg_response_sec if q else "",
+        "tonality": tonality,
+        "tonality_ru": TONALITY_RU.get(tonality or "", tonality or ""),
+        "avg_response_sec": _round(q.avg_response_sec, 2) if q else "",
         "violation_pct": q.violation_pct if q else "",
         "status": call.status,
+        "status_ru": STATUS_RU.get(call.status, call.status),
     }
+
+
+def _ru_number(value):
+    """Excel в русской локали ждёт запятую в дробях и точку с запятой между колонками."""
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".").replace(".", ",") if value >= 0 else value
+    return value
+
+
+def _stamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 @router.get("/export/csv")
@@ -109,14 +130,14 @@ def export_csv(
     write_audit(session, "export.csv", user=user, detail=str(len(calls)), request=request)
     session.commit()
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    writer = csv.writer(buf, delimiter=";")
     writer.writerow([title for _, title in CSV_COLUMNS])
     for call in calls:
         row = _flat(call)
-        writer.writerow([csv_cell(row[key]) for key, _ in CSV_COLUMNS])
+        writer.writerow([csv_cell(_ru_number(row[key])) for key, _ in CSV_COLUMNS])
     payload = buf.getvalue().encode("utf-8-sig")
     headers = {
-        "Content-Disposition": 'attachment; filename="kpi_calls.csv"',
+        "Content-Disposition": f'attachment; filename="kpi_calls_{_stamp()}.csv"',
         "X-Content-Type-Options": "nosniff",
     }
     return StreamingResponse(io.BytesIO(payload), media_type="text/csv; charset=utf-8", headers=headers)
@@ -146,8 +167,10 @@ def export_json(
     else:
         data = [_flat(c) for c in calls]
     payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    kind = "calls_full_unmasked" if unmasked else "calls_full" if full else "kpi_calls"
+    name = f"{kind}_{_stamp()}.json"
     headers = {
-        "Content-Disposition": 'attachment; filename="kpi_calls.json"',
+        "Content-Disposition": f'attachment; filename="{name}"',
         "X-Content-Type-Options": "nosniff",
     }
     return StreamingResponse(io.BytesIO(payload), media_type="application/json", headers=headers)

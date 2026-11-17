@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.access import is_operator, limit_calls
@@ -25,14 +26,15 @@ def compare_operators(
     """Сравнение операторов: рейтинг, тренд по неделям, частые ошибки. Оператор видит только себя."""
     if period not in PERIODS:
         period = "30d"
-    q = limit_calls(
-        session.query(Call).options(joinedload(Call.quality)).filter(Call.status == "done", Call.operator_id.isnot(None)),
-        user,
-    )
     days = PERIODS[period]
+    base = limit_calls(session.query(Call).filter(Call.status == "done"), user)
     if days:
-        q = q.filter(Call.call_at >= utcnow() - timedelta(days=days))
+        base = base.filter(Call.call_at >= utcnow() - timedelta(days=days))
+    q = base.options(joinedload(Call.quality)).filter(Call.operator_id.isnot(None))
     calls = q.all()
+    # Звонки без оператора входят в общие цифры дашборда, но не в рейтинг и PDF: показываем, сколько их.
+    unassigned = base.filter(Call.operator_id.is_(None)).count()
+    span = base.with_entities(func.min(Call.call_at), func.max(Call.call_at)).one()
     groups: dict[int, list[Call]] = defaultdict(list)
     for c in calls:
         if c.quality:
@@ -64,5 +66,9 @@ def compare_operators(
         "period": period,
         "scope": "self" if mine else "team",
         "operators": rows,
+        "unassigned": 0 if mine else unassigned,
+        "data_from": span[0].date().isoformat() if span[0] else None,
+        "data_to": span[1].date().isoformat() if span[1] else None,
+        "period_days": days,
         "team": None if mine else {**summary(all_done), "trend": weekly_trend(all_done), "top_mistakes": top_mistakes(all_done, 5)},
     }

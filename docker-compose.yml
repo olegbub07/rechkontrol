@@ -37,6 +37,7 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float32}
       PII_MASKING: ${PII_MASKING:-true}
+      DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Moscow}
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
       # ollama - сервис этой же compose-сети на этой машине, наружу текст не уходит.

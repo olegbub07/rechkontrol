@@ -368,10 +368,15 @@ async function route() {
 }
 
 async function refreshQueueChip() {
+  const chip = $("#queue-chip");
+  // Пока не сменён стартовый пароль, сервер отвечает 403 на всё, кроме смены пароля.
+  // Оператор звонки не загружает, очередь ему не нужна.
+  const skip = !state.user || state.user.must_change_password || state.user.role === "operator";
+  chip.hidden = skip;
+  if (skip) return;
   try {
     const q = await api("/queue");
     const n = q.queued + (q.processing?.length || 0);
-    const chip = $("#queue-chip");
     chip.textContent = n ? `очередь ${n}` : "очередь пуста";
     chip.classList.toggle("busy", n > 0);
   } catch {}
@@ -536,8 +541,8 @@ async function renderDashboard(view) {
         ${scoreGauge(data.metrics_avg.resolution, "Решение")}
       </div>
     </div>
-    ${mine ? "" : `<div class="card mt">
-      <h2>Требования кейса</h2>
+    ${mine || state.user?.role !== "admin" ? "" : `<details class="card mt case-req">
+      <summary><h2 class="inline-title">О системе: требования кейса</h2></summary>
       <ul class="case-list">
         <li>Расшифровка Whisper на этой машине${data.offline ? " · модель уже на диске, сеть для звонков не нужна" : " · модель скачается один раз, сами записи наружу не уходят"}</li>
         <li>Оценка: вежливость, полнота ответа, скрипт, решение проблемы и рекомендации оператору</li>
@@ -545,7 +550,7 @@ async function renderDashboard(view) {
         <li>KPI в CSV и JSON: процент нарушений, время ответа, тональность, дата и время, идентификатор оператора</li>
         <li>Профиль обработки звонка до 10 минут — 3–5 минут. Это расчёт, не замер на этой машине. Сейчас в работе ${data.queue.processing}, ждут ${data.queue.queued}</li>
       </ul>
-    </div>`}
+    </details>`}
     <div class="grid kpis mt">
       <div class="card kpi"><div class="label">Нарушения</div><div class="value ${scoreClass(100 - k.violation_pct)}">${k.violation_pct.toFixed(0)}%</div><div class="hint">доля непройденных проверок</div></div>
       <div class="card kpi"><div class="label">Время ответа</div><div class="value">${k.avg_response_sec == null ? "—" : k.avg_response_sec.toFixed(1)}</div><div class="hint">секунды после реплики клиента</div></div>
@@ -580,7 +585,7 @@ async function renderDashboard(view) {
       <h2>Нужно внимание</h2>
       <div class="alert-list">${data.attention.map((c) => `
         <div class="alert-row" data-go="#/calls/${c.id}">
-          <div>${escapeHtml(c.orig_filename)}<div class="muted">${escapeHtml(c.operator_name || "без оператора")} · нарушения ${c.violation_pct == null ? "—" : Number(c.violation_pct).toFixed(0) + "%"}</div></div>
+          <div><span class="muted">№${c.id}</span> ${escapeHtml(c.orig_filename)}<div class="muted">${escapeHtml(c.operator_name || "без оператора")} · нарушения ${c.violation_pct == null ? "—" : Number(c.violation_pct).toFixed(0) + "%"}</div></div>
           ${pill(c.overall)}
         </div>`).join("")}</div>
     </div>` : ""}
@@ -612,7 +617,7 @@ function callsMini(items) {
   if (!items.length) return `<p class="empty">Пока нет звонков</p>`;
   return `<table><thead><tr><th>Когда</th><th>Файл</th><th>Оператор</th><th>Оценка</th></tr></thead><tbody>
     ${items.map((c) => `<tr class="link" data-go="#/calls/${c.id}">
-      <td>${fmtDate(c.call_at)}</td><td>${escapeHtml(c.orig_filename)}</td>
+      <td>${fmtDate(c.call_at)}</td><td><span class="muted">№${c.id}</span> ${escapeHtml(c.orig_filename)}</td>
       <td>${escapeHtml(c.operator_name || "—")}${c.operator_external_id ? ` · ${escapeHtml(c.operator_external_id)}` : ""}</td><td>${c.status === "done" ? pill(c.overall) : escapeHtml(statusRu(c.status))}</td>
     </tr>`).join("")}
   </tbody></table>`;
@@ -712,7 +717,7 @@ function callsTable(items) {
   </tr></thead><tbody>
     ${items.map((c) => `<tr class="link" data-go="#/calls/${c.id}">
       <td>${fmtDate(c.call_at)}</td>
-      <td>${escapeHtml(c.orig_filename)}${c.is_demo ? ' <span class="tag">демо</span>' : ""}${c.flagged ? ' <span class="tag">пометка</span>' : ""}</td>
+      <td><span class="muted">№${c.id}</span> ${escapeHtml(c.orig_filename)}${c.is_demo ? ' <span class="tag">демо</span>' : ' <span class="tag">загружен</span>'}${c.flagged ? ' <span class="tag">пометка</span>' : ""}</td>
       <td>${escapeHtml(c.operator_name || "—")}${c.operator_external_id ? `<div class="muted">${escapeHtml(c.operator_external_id)}</div>` : ""}</td>
       <td>${fmtSec(c.duration_sec)}</td>
       <td>${c.overall == null ? "—" : pill(c.overall)}</td>
@@ -758,7 +763,7 @@ async function renderCall(view, id) {
     <div class="dossier">
       <div class="card featured">
         <p class="eyebrow">${escapeHtml(statusRu(call.status))}</p>
-        <h2>${escapeHtml(call.orig_filename)}</h2>
+        <h2><span class="muted">№${call.id}</span> ${escapeHtml(call.orig_filename)}</h2>
         <p class="muted" id="live-label"></p>
         ${live ? meter(call.progress || 4, "meter gold", 'id="live-progress"') : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
         <h3 class="player-title">Прослушивание</h3>
@@ -832,6 +837,7 @@ async function renderCall(view, id) {
   if (liveLabel) liveLabel.textContent = dossierLine(call);
   paintTurns("");
   if (typeof mountTurnLegend === "function") mountTurnLegend(call);
+  if (typeof mountOperatorAssign === "function") mountOperatorAssign(call);
   $("#turn-q").oninput = () => paintTurns($("#turn-q").value);
   const onlyFail = $("#only-fail");
   if (onlyFail) onlyFail.onchange = () => {
@@ -1464,7 +1470,7 @@ function userRows(users, operators) {
 function auditRow(r) {
   const text = `${r.username || ""} ${AUDIT_RU[r.action] || r.action} ${r.detail || ""} ${r.ip || ""}`.toLowerCase();
   return `<tr data-text="${escapeHtml(text)}">
-    <td>${fmtDate(r.created_at)}</td>
+    <td>${escapeHtml(r.created_at_local || fmtDate(r.created_at))}</td>
     <td>${escapeHtml(r.username || "—")}</td>
     <td>${escapeHtml(AUDIT_RU[r.action] || r.action)}</td>
     <td>${escapeHtml(r.detail || "")}</td>
@@ -1586,7 +1592,7 @@ async function renderAdmin(view) {
       </div>
       <div class="table-scroll desk">
         <table>
-          <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th><th>IP</th></tr></thead>
+          <thead><tr><th>Когда${audit.tz ? ` <span class="muted">(${escapeHtml(audit.tz)})</span>` : ""}</th><th>Кто</th><th>Действие</th><th>Детали</th><th>IP</th></tr></thead>
           <tbody id="audit-body">
             ${auditRows.length ? auditRows.map(auditRow).join("") : `<tr><td colspan="5">Журнал пока пуст.</td></tr>`}
           </tbody>

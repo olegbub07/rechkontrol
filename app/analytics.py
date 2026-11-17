@@ -78,9 +78,13 @@ def summary(calls: list[Call]) -> dict:
     return out
 
 
+MIN_WEEK_CALLS = 2
+
+
 def trend_delta(trend: list[dict]) -> float | None:
-    """Изменение среднего балла последней недели с оценками к предыдущей."""
-    points = [p for p in trend if p["overall"] is not None]
+    """Изменение среднего балла последней недели с оценками к предыдущей.
+    Недели с одним звонком не сравниваем: один звонок даёт скачок на десятки баллов."""
+    points = [p for p in trend if p["overall"] is not None and p.get("count", 0) >= MIN_WEEK_CALLS]
     if len(points) < 2:
         return None
     return round(points[-1]["overall"] - points[-2]["overall"], 1)
