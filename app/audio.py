@@ -18,30 +18,47 @@ class AudioError(ValueError):
 def sniff_audio(header: bytes, filename: str) -> str:
     ext = Path(filename).suffix.lower()
     if ext not in settings.allowed_audio_ext:
-        raise AudioError("Поддерживаются WAV, MP3, OGG, FLAC и M4A.")
-    if len(header) < 12:
-        raise AudioError("Файл слишком короткий или повреждён.")
+        raise AudioError("это не аудиофайл по расширению: поддерживаются WAV, MP3, OGG, FLAC и M4A.")
+    if not header:
+        raise AudioError("файл пустой.")
     if ext == ".wav":
         if header[:4] == b"RIFF" and header[8:12] == b"WAVE":
             return "audio/wav"
-        raise AudioError("Расширение WAV, но это не WAVE-файл.")
+        raise AudioError(_not_audio(header, "WAV", "RIFF/WAVE"))
     if ext in {".ogg", ".oga"}:
         if header.startswith(b"OggS"):
             return "audio/ogg"
-        raise AudioError("Расширение OGG, но сигнатура не совпадает.")
+        raise AudioError(_not_audio(header, "OGG", "OggS"))
     if ext == ".mp3":
         if header.startswith(b"ID3") or header[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xfa", b"\xff\xf4"}:
             return "audio/mpeg"
-        raise AudioError("Расширение MP3, но сигнатура не совпадает.")
+        raise AudioError(_not_audio(header, "MP3", "MPEG"))
     if ext == ".flac":
         if header.startswith(b"fLaC"):
             return "audio/flac"
-        raise AudioError("Расширение FLAC, но сигнатура не совпадает.")
+        raise AudioError(_not_audio(header, "FLAC", "fLaC"))
     if ext in {".m4a", ".mp4"}:
         if b"ftyp" in header[:12]:
             return "audio/mp4"
-        raise AudioError("Расширение M4A, но сигнатура не совпадает.")
-    raise AudioError("Не удалось определить аудиоформат файла.")
+        raise AudioError(_not_audio(header, "M4A", "ftyp"))
+    raise AudioError("это не аудиофайл: формат не определён.")
+
+
+def _not_audio(header: bytes, ext: str, magic: str) -> str:
+    """Понятная причина отказа: по первым байтам видно, что внутри не звук."""
+    sample = header[:64]
+    try:
+        text = sample.decode("utf-8")
+        looks_text = all(ch.isprintable() or ch in "\r\n\t" for ch in text)
+    except UnicodeDecodeError:
+        looks_text = False
+    kinds = {b"%PDF": "PDF", b"PK\x03\x04": "архив или документ Office", b"\x89PNG": "картинка PNG", b"\xff\xd8\xff": "картинка JPEG", b"MZ": "программа Windows"}
+    for magic_bytes, kind in kinds.items():
+        if sample.startswith(magic_bytes):
+            return f"это не аудиофайл (внутри {kind}), хотя расширение {ext}."
+    if looks_text:
+        return f"это не аудиофайл (внутри текст), хотя расширение {ext}."
+    return f"это не аудиофайл: расширение {ext}, но нет заголовка {magic}."
 
 
 def _ffmpeg() -> str:
@@ -103,7 +120,7 @@ def to_wav_mono_16k(src: Path, dst: Path, max_duration_sec: int | None = None) -
         raise AudioError("Превышено время декодирования аудио.") from exc
     if proc.returncode != 0 or not dst.exists():
         dst.unlink(missing_ok=True)
-        raise AudioError("Не удалось декодировать аудио. Проверьте, что это WAV, MP3, OGG, FLAC или M4A.")
+        raise AudioError("Это не аудиофайл или он повреждён: декодер не нашёл в нём звука. Нужен WAV, MP3, OGG, FLAC или M4A.")
     info = sf.info(str(dst))
     duration = float(info.duration)
     if duration > limit + 0.05 or duration < 0.4:

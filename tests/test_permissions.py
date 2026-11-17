@@ -32,6 +32,7 @@ NOT_OPERATOR = [
     ("POST", "/api/analyze-text", {"text": "Здравствуйте"}),
     ("GET", "/api/export/csv", None),
     ("GET", "/api/export/json", None),
+    ("GET", "/api/export/xlsx", None),
     ("GET", "/api/dataset", None),
     ("POST", "/api/dataset/evaluate", None),
     ("GET", "/api/checklist", None),

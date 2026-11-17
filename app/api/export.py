@@ -122,25 +122,96 @@ def export_csv(
     operator_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    style: str = Query("ru", pattern="^(ru|standard)$"),
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ):
+    """style=ru - «;» и запятая в дробях (русский Excel), style=standard - «,» и точка (LibreOffice, Python, BI)."""
     reject_operator(user)
     calls = _rows(session, operator_id, date_from, date_to)
-    write_audit(session, "export.csv", user=user, detail=str(len(calls)), request=request)
+    write_audit(session, "export.csv", user=user, detail=f"{len(calls)} {style}", request=request)
     session.commit()
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
+    ru = style == "ru"
+    writer = csv.writer(buf, delimiter=";" if ru else ",")
     writer.writerow([title for _, title in CSV_COLUMNS])
     for call in calls:
         row = _flat(call)
-        writer.writerow([csv_cell(_ru_number(row[key])) for key, _ in CSV_COLUMNS])
+        writer.writerow([csv_cell(_ru_number(row[key]) if ru else row[key]) for key, _ in CSV_COLUMNS])
     payload = buf.getvalue().encode("utf-8-sig")
+    suffix = "" if ru else "_standard"
     headers = {
-        "Content-Disposition": f'attachment; filename="kpi_calls_{_stamp()}.csv"',
+        "Content-Disposition": f'attachment; filename="kpi_calls_{_stamp()}{suffix}.csv"',
         "X-Content-Type-Options": "nosniff",
     }
     return StreamingResponse(io.BytesIO(payload), media_type="text/csv; charset=utf-8", headers=headers)
+
+
+XLSX_FORMATS = {
+    "datetime": "DD.MM.YYYY HH:MM",
+    "duration_sec": "0.0",
+    "overall": "0.0",
+    "politeness": "0.0",
+    "completeness": "0.0",
+    "script_compliance": "0.0",
+    "resolution": "0.0",
+    "avg_response_sec": "0.00",
+    "violation_pct": "0.0",
+}
+
+
+@router.get("/export/xlsx")
+def export_xlsx(
+    request: Request,
+    operator_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    session: Session = Depends(db_session),
+    user: User = Depends(current_user),
+):
+    """Excel-файл: числа и даты - настоящие числа и даты, от языка системы не зависит."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+
+    reject_operator(user)
+    calls = _rows(session, operator_id, date_from, date_to)
+    write_audit(session, "export.xlsx", user=user, detail=str(len(calls)), request=request)
+    session.commit()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "KPI звонков"
+    ws.append([title for _, title in CSV_COLUMNS])
+    for cell in ws[1]:
+        cell.font = cell.font.copy(bold=True)
+    for call in calls:
+        row = _flat(call)
+        row["datetime"] = call.call_at
+        values = []
+        for key, _ in CSV_COLUMNS:
+            value = row[key]
+            values.append(None if value == "" else value)
+        ws.append(values)
+        r = ws.max_row
+        for col, (key, _) in enumerate(CSV_COLUMNS, 1):
+            cell = ws.cell(row=r, column=col)
+            if isinstance(cell.value, str):
+                cell.data_type = "s"  # текст вида «=...» не превращается в формулу
+            if key in XLSX_FORMATS and cell.value is not None:
+                cell.number_format = XLSX_FORMATS[key]
+    for col, (_, title) in enumerate(CSV_COLUMNS, 1):
+        ws.column_dimensions[get_column_letter(col)].width = max(12, min(40, len(title) + 2))
+    ws.freeze_panes = "A2"
+    out = io.BytesIO()
+    wb.save(out)
+    headers = {
+        "Content-Disposition": f'attachment; filename="kpi_calls_{_stamp()}.xlsx"',
+        "X-Content-Type-Options": "nosniff",
+    }
+    return StreamingResponse(
+        io.BytesIO(out.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @router.get("/export/json")

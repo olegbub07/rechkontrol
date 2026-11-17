@@ -109,6 +109,8 @@ class CallListItem(BaseModel):
     is_demo: bool = False
     error_message: str | None = None
     flagged: bool = False
+    # Предупреждение при загрузке (например, код оператора из имени файла не найден)
+    warning: str | None = None
 
 
 class SpanOut(BaseModel):

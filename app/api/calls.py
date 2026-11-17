@@ -176,7 +176,12 @@ async def _store_encrypted(upload: UploadFile, path: Path, max_bytes: int) -> st
             if writer.size > max_bytes:
                 raise HTTPException(413, f"{name}: файл больше {settings.max_upload_mb} МБ")
         if writer is None:
-            raise HTTPException(400, f"{name}: файл слишком маленький")
+            # Файл короче 64 байт: сначала проверяем, аудио ли это вообще, и только потом говорим о размере.
+            try:
+                sniff_audio(head[:16], name)
+            except AudioError as exc:
+                raise HTTPException(400, f"{name}: {exc}") from exc
+            raise HTTPException(400, f"{name}: файл слишком короткий, звука в нём нет")
         writer.close()
     except BaseException:
         if writer is not None:
@@ -209,6 +214,7 @@ async def upload_calls(
             raise HTTPException(400, "Некорректная дата звонка") from exc
     op = _get_or_create_operator(session, operator_id, operator_name)
     created: list[Call] = []
+    warnings: dict[int, str] = {}
     stored_paths: list[Path] = []
     max_bytes = settings.max_upload_mb * 1024 * 1024
     try:
@@ -218,6 +224,7 @@ async def upload_calls(
             mime = await _store_encrypted(upload, path, max_bytes)
             stored_paths.append(path)
             filename = sanitize_filename(upload.filename)
+            missing = ""
             # Если дата и оператор не указаны в форме, берём их из имени файла (2026-11-07_..., OP-104).
             file_when = None if call_at else date_from_filename(filename)
             file_op = op
@@ -225,6 +232,8 @@ async def upload_calls(
                 code = operator_code_from_filename(filename)
                 if code:
                     file_op = session.query(Operator).filter(Operator.external_id == code).first()
+                    if file_op is None:
+                        missing = f"оператор {code} не найден, звонок загружен без оператора"
             call = Call(
                 orig_filename=filename,
                 stored_name=stored,
@@ -239,6 +248,8 @@ async def upload_calls(
             session.add(call)
             session.flush()
             created.append(call)
+            if missing:
+                warnings[call.id] = missing
         names = ", ".join(c.orig_filename for c in created)
         write_audit(session, "call.upload", user=user, detail=f"{len(created)} файл(ов): {names}"[:480], request=request)
         session.commit()
@@ -247,9 +258,13 @@ async def upload_calls(
         for path in stored_paths:
             path.unlink(missing_ok=True)
         raise
+    out = []
     for item in created:
         session.refresh(item)
-    return [call_item(item) for item in created]
+        row = call_item(item)
+        row.warning = warnings.get(item.id)
+        out.append(row)
+    return out
 
 
 @router.get("/calls/{call_id}/audio")

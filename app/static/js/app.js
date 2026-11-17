@@ -1058,7 +1058,13 @@ async function renderUpload(view) {
     try {
       const created = await api("/calls/upload", { method: "POST", body: fd });
       state.files = [];
-      toast(`В очереди: ${created.length}`);
+      const warned = created.filter((c) => c.warning);
+      if (warned.length) {
+        const text = warned.map((c) => `${c.orig_filename}: ${c.warning}`).join("; ");
+        toast(`В очереди: ${created.length}. ${text}. Назначьте оператора в карточке звонка`, true);
+      } else {
+        toast(`В очереди: ${created.length}`);
+      }
       location.hash = "#/calls";
     } catch (err) {
       $("#up-status").textContent = err.message;
@@ -1098,7 +1104,7 @@ async function renderOperators(view) {
 }
 
 async function renderExport(view) {
-  setNav("export", "Экспорт KPI", "CSV и JSON: нарушения, время ответа, тональность, дата, оператор", "Отчётность");
+  setNav("export", "Экспорт KPI", "Excel, CSV и JSON: нарушения, время ответа, тональность, дата, оператор", "Отчётность");
   const ops = await api("/operators");
   view.innerHTML = `
     <div class="card featured">
@@ -1110,7 +1116,9 @@ async function renderExport(view) {
         </label>
         <label>С <input type="date" name="date_from" /></label>
         <label>По <input type="date" name="date_to" /></label>
-        <button class="btn gold row" type="submit">Скачать CSV</button>
+        <button class="btn gold row" type="submit" title="Числа и даты - настоящие числа, открывается в Excel и LibreOffice при любом языке системы">Скачать Excel (XLSX)</button>
+        <button class="btn row" name="csv" type="button" title="Разделитель «;», дроби через запятую - для Excel с русским языком">CSV для русского Excel</button>
+        <button class="btn ghost row" name="csvstd" type="button" title="Разделитель «,», дроби через точку - для LibreOffice с английским языком, Python, BI">CSV стандартный</button>
         <button class="btn row" name="json" type="button">Скачать JSON</button>
         ${state.user?.role === "admin" ? `<button class="btn ghost row" name="full" type="button">JSON с расшифровками</button>` : ""}
       </form>
@@ -1138,7 +1146,9 @@ async function renderExport(view) {
       toast(err.message, true);
     }
   };
-  $("#ex").onsubmit = async (e) => { e.preventDefault(); await download("/export/csv?" + qs()); };
+  $("#ex").onsubmit = async (e) => { e.preventDefault(); await download("/export/xlsx?" + qs()); };
+  $("#ex [name=csv]").onclick = () => download("/export/csv?" + qs());
+  $("#ex [name=csvstd]").onclick = () => download("/export/csv?style=standard&" + qs());
   $("#ex [name=json]").onclick = () => download("/export/json?" + qs());
   const fullExport = $("#ex [name=full]");
   if (fullExport) fullExport.onclick = () => download("/export/json?full=true&" + qs());

@@ -140,3 +140,89 @@ def test_compare_counts_calls_without_operator_and_assign(monkeypatch):
         with SessionLocal() as s:
             s.delete(s.get(Call, up["id"]))
             s.commit()
+
+
+def test_unknown_operator_code_warns(monkeypatch):
+    from app.db import SessionLocal
+    from app.models import Call
+
+    ensure_user("qa.op999.analyst", "analyst")
+    with _client(monkeypatch) as client:
+        h = auth(client, "qa.op999.analyst")
+        files = [
+            ("files", ("2026-11-07_OP-999_x.wav", _wav_bytes(1.0), "audio/wav")),
+            ("files", ("2026-11-07_OP-104_x.wav", _wav_bytes(1.0), "audio/wav")),
+        ]
+        out = client.post("/api/calls/upload", headers=h, files=files)
+        assert out.status_code == 200, out.text
+        unknown, known = out.json()
+        assert unknown["warning"] == "оператор OP-999 не найден, звонок загружен без оператора"
+        assert unknown["operator_id"] is None
+        assert known["warning"] is None and known["operator_external_id"] == "OP-104"
+        with SessionLocal() as s:
+            for c in s.query(Call).filter(Call.id.in_([unknown["id"], known["id"]])).all():
+                s.delete(c)
+            s.commit()
+
+
+def test_non_audio_file_is_named_so(monkeypatch):
+    ensure_user("qa.fake.analyst", "analyst")
+    with _client(monkeypatch) as client:
+        h = auth(client, "qa.fake.analyst")
+        cases = [
+            (b"this is not audio\n", "внутри текст"),
+            (b"hello " * 200, "внутри текст"),
+            (b"%PDF-1.7\n" + b"\x00" * 200, "внутри PDF"),
+            (b"\x00\x01\x02\x03" * 100, "это не аудиофайл"),
+        ]
+        for data, expected in cases:
+            res = client.post("/api/calls/upload", headers=h, files=[("files", ("fake_audio.wav", data, "audio/wav"))])
+            assert res.status_code == 400
+            detail = res.json()["detail"]
+            assert "это не аудиофайл" in detail and expected in detail and "маленький" not in detail
+        tiny = client.post("/api/calls/upload", headers=h, files=[("files", ("t.wav", b"RIFF\x00\x00\x00\x00WAVEfmt ", "audio/wav"))])
+        assert tiny.status_code == 400 and "слишком короткий" in tiny.json()["detail"]
+
+
+def test_xlsx_export_has_real_numbers_and_standard_csv(monkeypatch):
+    import openpyxl
+
+    ensure_user("qa.xl.analyst", "analyst")
+    with _client(monkeypatch) as client:
+        h = auth(client, "qa.xl.analyst")
+        res = client.get("/api/export/xlsx", headers=h)
+        assert res.status_code == 200
+        assert 'filename="kpi_calls_' in res.headers["content-disposition"] and ".xlsx" in res.headers["content-disposition"]
+        ws = openpyxl.load_workbook(io.BytesIO(res.content)).active
+        head = [c.value for c in ws[1]]
+        rows = [[c.value for c in r] for r in ws.iter_rows(min_row=2)]
+        # в общей базе тестов есть свежие звонки без оценки, берём готовый
+        row = next(r for r in rows if r[head.index("Итоговое качество")] is not None)
+        assert all(isinstance(r[head.index("Дата и время")], datetime) for r in rows)
+        assert isinstance(row[head.index("Итоговое качество")], (int, float))
+        durations = [r[head.index("Длительность, сек")] for r in rows if r[head.index("Длительность, сек")] is not None]
+        assert durations and all(isinstance(d, (int, float)) for d in durations)
+        assert isinstance(row[head.index("Дата и время")], datetime)
+        assert row[head.index("Тональность")] in {"позитивная", "нейтральная", "негативная"}
+        std = client.get("/api/export/csv?style=standard", headers=h)
+        assert std.status_code == 200 and "_standard.csv" in std.headers["content-disposition"]
+        rows = list(csv.reader(io.StringIO(std.content.decode("utf-8-sig"))))
+        dur = [r[rows[0].index("Длительность, сек")] for r in rows[1:] if r[rows[0].index("Длительность, сек")]]
+        assert dur
+        assert dur and all("," not in d for d in dur) and any("." in d for d in dur)
+        float(dur[0])
+        assert client.get("/api/export/csv?style=bad", headers=h).status_code == 422
+        op = auth_operator(client)
+        if op:
+            assert client.get("/api/export/xlsx", headers=op).status_code == 403
+
+
+def auth_operator(client):
+    from app.db import SessionLocal
+    from app.models import Operator
+
+    with SessionLocal() as s:
+        if not s.query(Operator).filter(Operator.external_id == "OP-104").first():
+            return None
+    ensure_user("qa.xl.operator", "operator", "OP-104")
+    return auth(client, "qa.xl.operator")

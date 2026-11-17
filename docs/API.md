@@ -58,7 +58,7 @@ Authorization: Bearer <token>
 | PUT | `/settings` | `{ "company_phrases", "extra_script_phrases" }`, только администратор |
 | POST | `/analyze-text` | оценка текста без аудио |
 | GET | `/checklist` | чек-лист качества, значения по умолчанию, лимиты (admin, analyst) |
-| PUT | `/checklist` | `{ "criteria": [{ "id", "enabled", "title", "weight", "phrases" }], "category_weights" }`, только admin, 422 с русским текстом при ошибке проверки (пустой вес, буквы, вне диапазона). Ответ: `checklist`, `changed`, `normalized`, `message` |
+| PUT | `/checklist` | `{ "criteria": [{ "id", "enabled", "title", "weight", "phrases" }], "category_weights" }`, только admin, 422 с русским текстом при ошибке проверки (пустой вес, буквы, вне диапазона, вес критерия точнее 0,1, доля метрики точнее 0,001). Ответ: `checklist`, `changed`, `normalized`, `message` |
 | POST | `/checklist/reset` | вернуть встроенный чек-лист (admin) |
 | POST | `/checklist/rescore` | пересчитать оценки готовых звонков по сохранённой расшифровке (admin) |
 | GET | `/operators/compare?period=7d\|30d\|90d\|all` | рейтинг, тренд по неделям, частые ошибки; оператор получает только себя, `team` = null. Ещё `unassigned` (готовые звонки без оператора за период), `data_from` / `data_to` (даты первого и последнего звонка), `delta` только когда в обеих неделях не меньше 2 звонков |
@@ -68,7 +68,9 @@ Authorization: Bearer <token>
 | Метод | Путь | Описание |
 |---|---|---|
 | GET | `/dashboard?period=7d\|30d\|all` | KPI, тренд, тональность, операторы, список `attention` |
-| GET | `/export/csv` | фильтры `operator_id`, `date_from`, `date_to` |
+| GET | `/export/xlsx` | Excel-файл с теми же колонками, числа и даты записаны как числа и даты (не зависит от языка системы), фильтры как у CSV |
+| GET | `/export/csv` | фильтры `operator_id`, `date_from`, `date_to`; `style=ru` (по умолчанию: «;», запятая в дробях) или `style=standard` («,», точка в дробях, файл `..._standard.csv`) |
+| POST | `/calls/upload` → `warning` | у каждого созданного звонка поле `warning`, например «оператор OP-999 не найден, звонок загружен без оператора». Файл, который не является аудио, отклоняется с 400 «это не аудиофайл…» |
 | GET | `/export/json` | те же фильтры; `full=true` — с расшифровками (только admin); `unmasked=true` вместе с `full` снимает маску и пишется в журнал |
 
 | GET | `/reports/operator/{id}.pdf?date_from=ГГГГ-ММ-ДД&date_to=ГГГГ-ММ-ДД` | PDF-отчёт по оператору (admin, analyst; по умолчанию последние 30 дней, период до 366 дней), пишется в журнал `report.operator` |
