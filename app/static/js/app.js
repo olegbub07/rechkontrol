@@ -1,7 +1,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false, gateAccounts: [] };
+const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false };
 const OPERATOR_BLOCKED = ["upload", "operators", "export", "dataset", "settings", "admin"];
 
 function token() {
@@ -74,38 +74,12 @@ function showLogin() {
   refreshGate();
 }
 
-function fillLogin(account) {
-  const form = $("#login-form");
-  if (!form || !account) return;
-  form.username.value = account.username || "";
-  form.password.value = account.password || "";
-  form.password.focus();
-}
-
 async function refreshGate() {
   const status = $("#login-status");
-  const box = $("#cred-box");
-  const list = $("#cred-list");
   if (!status || $("#login").hidden) return;
   try {
-    const res = await fetch("/api/auth/bootstrap", { headers: { Accept: "application/json" } });
+    const res = await fetch("/api/health", { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error("down");
-    const data = await res.json();
-    const accounts = Array.isArray(data.accounts) ? data.accounts : [];
-    state.gateAccounts = accounts;
-    if (data.show_password && accounts.length && box && list) {
-      box.hidden = false;
-      list.innerHTML = accounts.map((account, index) => `
-        <button type="button" class="cred-account" data-i="${index}">
-          <b>${escapeHtml(account.title || account.username)}</b>
-          <span>${escapeHtml(account.username)} · ${escapeHtml(account.hint || "")}</span>
-        </button>`).join("");
-      $$(".cred-account", list).forEach((button) => {
-        button.onclick = () => fillLogin(state.gateAccounts[Number(button.dataset.i)]);
-      });
-    } else if (box) {
-      box.hidden = true;
-    }
     status.textContent = "Программа на этой машине отвечает. Можно входить.";
   } catch {
     status.textContent = networkError();
@@ -139,7 +113,7 @@ function showBanner() {
   if (!el) return;
   if (state.user?.must_change_password) {
     el.hidden = false;
-    el.innerHTML = `<span>Стартовый пароль из документации ещё действует. Смените его.</span><button type="button" class="btn gold row" id="banner-pwd">Сменить пароль</button>`;
+    el.innerHTML = `<span>Вы вошли со стартовым паролем. Смените его, чтобы открыть кабинет.</span><button type="button" class="btn gold row" id="banner-pwd">Сменить пароль</button>`;
     $("#banner-pwd").onclick = openAccount;
   } else {
     el.hidden = true;
@@ -1141,8 +1115,8 @@ function postureItems(posture) {
       ? ["ok", "Контур", "Кабинет слушает только эту машину."]
       : ["bad", "Контур", "Разрешён доступ не только с этой машины. Перед этим нужен TLS-прокси."],
     posture.bootstrap_active
-      ? ["bad", "Стартовый пароль", "Пароль из инструкции ещё действует. Смените его кнопкой «Пароль»."]
-      : ["ok", "Стартовый пароль", "Пароль из инструкции уже не используется."],
+      ? ["bad", "Стартовый пароль", "Администратор ещё не сменил стартовый пароль. Смените его кнопкой «Пароль»."]
+      : ["ok", "Стартовый пароль", "Стартовые пароли администраторов уже сменены."],
     healthy
       ? ["ok", "Целостность базы", "Проверка файла базы прошла без ошибок."]
       : ["bad", "Целостность базы", "Файл базы не прошёл проверку. Подробности в журнале сервера."],

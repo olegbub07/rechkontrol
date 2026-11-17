@@ -99,7 +99,7 @@ def _serve(host: str, port: int) -> None:
         raise SystemExit(1)
     if host in LOOPBACK_HOSTS:
         sockets = _loopback_sockets(port)
-        config = uvicorn.Config("app.main:app", log_level="info")
+        config = uvicorn.Config("app.main:app", log_level="info", proxy_headers=False)
         server = uvicorn.Server(config)
         try:
             server.run(sockets=sockets)
@@ -110,7 +110,7 @@ def _serve(host: str, port: int) -> None:
                 except OSError:
                     pass
         return
-    uvicorn.run("app.main:app", host=host, port=port, reload=False, log_level="info")
+    uvicorn.run("app.main:app", host=host, port=port, reload=False, log_level="info", proxy_headers=False)
 
 
 def main() -> int:

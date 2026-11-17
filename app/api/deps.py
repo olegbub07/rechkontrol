@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
 
-from app.auth import decode_token, uses_public_bootstrap
+from app.auth import decode_token, needs_password_change
 from app.db import SessionLocal
 from app.models import User
 
@@ -48,10 +48,10 @@ def current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Учётная запись отключена")
     if int(payload.get("ver") or 0) != int(user.token_version or 1):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия сброшена, войдите снова")
-    if uses_public_bootstrap(user) and request.url.path not in _BOOTSTRAP_OPEN:
+    if needs_password_change(user) and request.url.path not in _BOOTSTRAP_OPEN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Смените стартовый пароль, прежде чем работать с записями",
+            detail="Смените стартовый пароль, прежде чем работать с кабинетом",
         )
     return user
 

@@ -108,6 +108,7 @@ def _migrate() -> None:
         ("users", "token_version", "INTEGER DEFAULT 1"),
         ("users", "last_login_at", "DATETIME"),
         ("users", "operator_id", "INTEGER"),
+        ("users", "must_change_password", "INTEGER DEFAULT 0"),
         ("calls", "flagged", "INTEGER DEFAULT 0"),
         ("calls", "review_note", "TEXT"),
     )
@@ -122,6 +123,7 @@ def _migrate() -> None:
         conn.execute(text("UPDATE users SET is_active = 1 WHERE is_active IS NULL"))
         conn.execute(text("UPDATE users SET token_version = 1 WHERE token_version IS NULL"))
         conn.execute(text("UPDATE calls SET flagged = 0 WHERE flagged IS NULL"))
+        conn.execute(text("UPDATE users SET must_change_password = 0 WHERE must_change_password IS NULL"))
 
 
 def assert_integrity() -> None:

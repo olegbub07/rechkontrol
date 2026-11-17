@@ -77,16 +77,94 @@ def test_sniff_accepts_case_formats():
     assert sniff_audio(b"ID3.........", "call.mp3") == "audio/mpeg"
 
 
-def test_bootstrap_hint_only_on_loopback_while_default():
-    from app.auth import bootstrap_hint
+def test_no_default_passwords_in_code():
+    from pathlib import Path
 
-    shown = bootstrap_hint("127.0.0.1", "admin", True)
-    assert shown["username"] == "admin"
-    assert shown["password"] == "CenterInvest2026!"
-    assert bootstrap_hint("8.8.8.8", "admin", True) == {"show_password": False, "username": None}
-    hidden = bootstrap_hint("localhost", "admin", False)
-    assert hidden["show_password"] is False
-    assert "password" not in hidden
+    root = Path(__file__).resolve().parent.parent
+    from app.config import Settings
+
+    assert Settings(_env_file=None).admin_password == ""
+    for name in ("README.md", ".env.example", "app/config.py", "app/static/js/app.js", "app/static/index.html"):
+        text = (root / name).read_text(encoding="utf-8")
+        for legacy in ("CentrAdmin2026!", "CentrOperator2026!", "CenterInvest2026!"):
+            assert legacy not in text, (name, legacy)
+
+
+def test_generated_password_passes_policy_and_is_random():
+    from app.auth import generate_password
+    from app.passwords import validate_password
+
+    first, second = generate_password(), generate_password()
+    assert first != second
+    assert validate_password(first) == first
+
+
+def test_client_ip_trusts_forwarded_only_from_configured_proxy(monkeypatch):
+    from starlette.requests import Request
+
+    from app.security import client_ip
+
+    def req(peer, xff=None):
+        headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+        return Request({"type": "http", "client": (peer, 1234), "headers": headers})
+
+    monkeypatch.setattr("app.security.settings.trusted_proxies", "")
+    assert client_ip(req("127.0.0.1", "8.8.8.8")) == "127.0.0.1"
+    monkeypatch.setattr("app.security.settings.trusted_proxies", "10.0.0.2")
+    assert client_ip(req("10.0.0.2", "1.1.1.1, 203.0.113.9")) == "203.0.113.9"
+    assert client_ip(req("10.0.0.2", "203.0.113.9, 10.0.0.2")) == "203.0.113.9"
+    assert client_ip(req("198.51.100.1", "127.0.0.1")) == "198.51.100.1"
+
+
+def test_bootstrap_endpoint_is_gone_and_forced_change_works(tmp_path, monkeypatch):
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import credentials_path, ensure_staff_accounts
+    from app.db import SessionLocal
+    from app.main import app
+    from app.models import User
+
+    with TestClient(app) as client:
+        assert client.get("/api/auth/bootstrap").status_code == 404
+        with SessionLocal() as session:
+            row = session.query(User).filter(User.username == "operator").one()
+            row.password_hash = __import__("app.auth", fromlist=["hash_password"]).hash_password("CentrOperator2026!")
+            session.commit()
+            issued = ensure_staff_accounts(session)
+            session.commit()
+        fresh = {name: (role, pwd) for name, role, pwd in issued}
+        assert "operator" in fresh
+        role, password = fresh["operator"]
+        assert role == "operator" and password != "CentrOperator2026!"
+        path = credentials_path()
+        assert path.exists()
+        if os.name != "nt":
+            assert path.stat().st_mode & 0o077 == 0
+        assert password in path.read_text(encoding="utf-8")
+
+        legacy = client.post("/api/auth/login", json={"username": "operator", "password": "CentrOperator2026!"})
+        assert legacy.status_code == 401
+        login = client.post("/api/auth/login", json={"username": "operator", "password": password})
+        assert login.status_code == 200
+        assert login.json()["user"]["must_change_password"] is True
+        headers = {"Authorization": f"Bearer {login.json()['token']}"}
+        blocked = client.get("/api/calls", headers=headers)
+        assert blocked.status_code == 403
+        same = client.post("/api/auth/password", headers=headers, json={"old_password": password, "new_password": password})
+        assert same.status_code == 400
+        changed = client.post(
+            "/api/auth/password",
+            headers=headers,
+            json={"old_password": password, "new_password": "Operator-New-2026x"},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["user"]["must_change_password"] is False
+        headers = {"Authorization": f"Bearer {changed.json()['token']}"}
+        assert client.get("/api/calls", headers=headers).status_code == 200
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        assert password not in text
 
 
 def test_db_rejects_attach_and_schema_rewrite():
@@ -124,12 +202,31 @@ def test_login_reaches_api_and_bootstrap():
     from app.main import app
     from app.models import User
 
+    from app.models import Operator
+
     name = "qa.listener"
+    op_name = "qa.operator"
     with SessionLocal() as session:
-        old = session.query(User).filter(User.username == name).one_or_none()
-        if old is not None:
-            session.delete(old)
-            session.commit()
+        for login_name in (name, op_name):
+            old = session.query(User).filter(User.username == login_name).one_or_none()
+            if old is not None:
+                session.delete(old)
+                session.commit()
+        person = session.query(Operator).filter(Operator.external_id == "OP-104").one_or_none()
+        if person is None:
+            person = Operator(name="Иванова", external_id="OP-104")
+            session.add(person)
+            session.flush()
+        session.add(
+            User(
+                username=op_name,
+                password_hash=hash_password("OperatorPass12!"),
+                role="operator",
+                is_active=1,
+                token_version=1,
+                operator_id=person.id,
+            )
+        )
         session.add(
             User(
                 username=name,
@@ -142,15 +239,6 @@ def test_login_reaches_api_and_bootstrap():
         session.commit()
     try:
         with TestClient(app) as client:
-            hint = client.get("/api/auth/bootstrap")
-            assert hint.status_code == 200
-            body = hint.json()
-            accounts = {item["username"]: item for item in body["accounts"]}
-            assert accounts["operator"]["password"] == "CentrOperator2026!"
-            assert accounts["operator"]["role"] == "operator"
-            if "admin" in accounts:
-                assert accounts["admin"]["password"] == "CentrAdmin2026!"
-                assert accounts["admin"]["role"] == "admin"
             login = client.post("/api/auth/login", json={"username": name, "password": "ListenPass12!"})
             assert login.status_code == 200
             headers = {"Authorization": f"Bearer {login.json()['token']}"}
@@ -168,7 +256,7 @@ def test_login_reaches_api_and_bootstrap():
 
             operator = client.post(
                 "/api/auth/login",
-                json={"username": "operator", "password": accounts["operator"]["password"]},
+                json={"username": op_name, "password": "OperatorPass12!"},
             )
             assert operator.status_code == 200
             op_headers = {"Authorization": f"Bearer {operator.json()['token']}"}
@@ -193,10 +281,11 @@ def test_login_reaches_api_and_bootstrap():
             assert client.get("/api/dashboard", headers=op_headers).status_code == 200
     finally:
         with SessionLocal() as session:
-            row = session.query(User).filter(User.username == name).one_or_none()
-            if row is not None:
-                session.delete(row)
-                session.commit()
+            for login_name in (name, op_name):
+                row = session.query(User).filter(User.username == login_name).one_or_none()
+                if row is not None:
+                    session.delete(row)
+                    session.commit()
 
 
 def test_login_lock_and_logout_survive_restart():

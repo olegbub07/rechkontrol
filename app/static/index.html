@@ -39,11 +39,7 @@
         <p class="eyebrow">Вход в кабинет</p>
         <h1>Контроль звонков на этой машине</h1>
         <p class="lead">Администратор слушает любые звонки и ведёт кабинет. Оператор видит только свои разговоры, без админки.</p>
-        <div class="cred" id="cred-box" hidden>
-          <div class="cred-kicker">Учётные записи на этой машине</div>
-          <div id="cred-list"></div>
-          <p class="hint">Пароли видны, пока их не сменили. Нажмите карточку, чтобы подставить вход.</p>
-        </div>
+        <p class="hint">Первый вход: логин и пароль напечатаны в консоли при первом запуске и сохранены в <code>data/initial_credentials.txt</code>. После входа программа попросит сменить пароль.</p>
         <label>Логин<input name="username" autocomplete="username" required maxlength="64" spellcheck="false" /></label>
         <label>Пароль<input name="password" type="password" autocomplete="current-password" required maxlength="128" /></label>
         <button type="submit" class="btn primary" id="login-submit">Войти в кабинет</button>

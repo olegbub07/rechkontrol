@@ -18,7 +18,10 @@ class Settings(BaseSettings):
     app_debug: bool = False
 
     admin_username: str = "admin"
-    admin_password: str = "CenterInvest2026!"
+    # Пусто: пароль администратора генерируется при первом запуске.
+    admin_password: str = ""
+    # Адреса reverse-proxy через запятую. Только от них принимается X-Forwarded-For.
+    trusted_proxies: str = ""
 
     data_dir: Path = DATA_DIR
     whisper_model: str = "base"

@@ -15,8 +15,8 @@ from app.auth import (
     hash_password,
     note_login_failure,
     revoke_jti,
-    staff_accounts,
-    uses_public_bootstrap,
+    forget_initial_credentials,
+    needs_password_change,
     verify_password,
 )
 from app.config import settings
@@ -35,16 +35,9 @@ def _user_out(user: User) -> UserOut:
         role=user.role,
         is_active=bool(user.is_active),
         last_login_at=user.last_login_at,
-        must_change_password=uses_public_bootstrap(user),
+        must_change_password=needs_password_change(user),
         operator_id=user.operator_id,
     )
-
-
-@router.get("/auth/bootstrap")
-def bootstrap(request: Request, session: Session = Depends(db_session)) -> dict:
-    host = request.client.host if request.client else ""
-    accounts = staff_accounts(host, session)
-    return {"show_password": bool(accounts), "accounts": accounts}
 
 
 @router.post("/auth/login", response_model=TokenOut)
@@ -99,7 +92,11 @@ def change_password(
         validate_password(body.new_password, db_user.username)
     except PasswordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if verify_password(body.new_password, db_user.password_hash):
+        raise HTTPException(status_code=400, detail="Новый пароль должен отличаться от старого")
     db_user.password_hash = hash_password(body.new_password)
+    db_user.must_change_password = 0
+    forget_initial_credentials(db_user.username)
     db_user.token_version = int(db_user.token_version or 1) + 1
     write_audit(session, "password_change", user=db_user, request=request)
     session.flush()

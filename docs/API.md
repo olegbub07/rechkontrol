@@ -76,5 +76,5 @@ Authorization: Bearer <token>
 ## Пример входа
 
 ```powershell
-curl http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"CentrAdmin2026!\"}"
+curl http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"admin\",\"password\":\"<пароль из data/initial_credentials.txt>\"}"
 ```

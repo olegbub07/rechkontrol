@@ -14,6 +14,8 @@ WEAK = {
     "centerinvest",
     "centerinvest2026",
     "centerinvest2026!",
+    "centradmin2026!",
+    "centroperator2026!",
 }
 
 

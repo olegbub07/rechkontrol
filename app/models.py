@@ -19,6 +19,7 @@ class User(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=1)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("operators.id"), nullable=True)
+    must_change_password: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

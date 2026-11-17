@@ -124,9 +124,31 @@ login_gate = LoginGate()
 api_gate = LoginGate(max_attempts=480, window_sec=60)
 
 
+def _trusted_proxies() -> frozenset[str]:
+    raw = getattr(settings, "trusted_proxies", "") or ""
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
+def client_ip(request: Request) -> str:
+    """Адрес клиента. X-Forwarded-For учитывается только от прокси из TRUSTED_PROXIES.
+
+    Берётся самый правый адрес цепочки, который не является доверенным прокси:
+    левые элементы заголовка клиент может подделать.
+    """
+    peer = request.client.host if request.client else "local"
+    proxies = _trusted_proxies()
+    if not proxies or peer not in proxies:
+        return peer
+    header = request.headers.get("x-forwarded-for", "")
+    chain = [item.strip() for item in header.split(",") if item.strip()]
+    for hop in reversed(chain):
+        if hop not in proxies:
+            return hop[:64]
+    return peer
+
+
 def client_key(request: Request) -> str:
-    host = request.client.host if request.client else "local"
-    return host
+    return client_ip(request)
 
 
 def sanitize_filename(name: str | None) -> str:

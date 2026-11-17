@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,23 +21,11 @@ log = logging.getLogger("rechkontrol.auth")
 _DUMMY_HASH: str | None = None
 _revoked: dict[str, int] = {}
 _revoke_lock = Lock()
-PUBLIC_BOOTSTRAP_PASSWORD = "CenterInvest2026!"
-SEEDED_STAFF = (
-    {
-        "username": "admin",
-        "password": "CentrAdmin2026!",
-        "role": "admin",
-        "title": "Администратор",
-        "hint": "все звонки, прослушивание и админка",
-    },
-    {
-        "username": "operator",
-        "password": "CentrOperator2026!",
-        "role": "operator",
-        "title": "Оператор",
-        "hint": "только свои разговоры, без админки",
-    },
-)
+# Пароли, которые когда-то были опубликованы в инструкции. Это не пароли по умолчанию:
+# если хеш учётки совпадает с одним из них, пароль при старте заменяется на случайный.
+LEGACY_PUBLIC_PASSWORDS = ("CenterInvest2026!", "CentrAdmin2026!", "CentrOperator2026!")
+DEMO_OPERATOR_USERNAME = "operator"
+DEMO_OPERATOR_EXTERNAL_ID = "OP-104"
 
 
 def hash_password(password: str) -> str:
@@ -190,83 +179,149 @@ def restore_persisted_guards() -> None:
             login_gate.remember(row.subject, float(row.created_at))
 
 
-def uses_public_bootstrap(user: User) -> bool:
-    if user.role != "admin":
-        return False
-    return verify_password(PUBLIC_BOOTSTRAP_PASSWORD, user.password_hash)
+def needs_password_change(user: User) -> bool:
+    return bool(getattr(user, "must_change_password", 0))
 
 
-def bootstrap_hint(host: str, username: str | None, password_matches: bool) -> dict:
-    """Пароль из инструкции виден только с этой машины и только пока он ещё не сменён."""
-    loopback = host in {"127.0.0.1", "::1", "localhost", "testclient"}
-    if not loopback or not password_matches or not username:
-        return {"show_password": False, "username": username if loopback else None}
-    return {
-        "show_password": True,
-        "username": username,
-        "password": PUBLIC_BOOTSTRAP_PASSWORD,
-    }
+def generate_password(length: int = 18) -> str:
+    """Случайный пароль, который проходит политику validate_password."""
+    import secrets
+    import string
 
+    from app.passwords import PasswordError, validate_password
 
-def staff_accounts(host: str, session: Session) -> list[dict]:
-    """Пароли учебных учёток видны только с этой машины и только пока их не сменили."""
-    loopback = host in {"127.0.0.1", "::1", "localhost", "testclient"}
-    if not loopback:
-        return []
-    found = []
-    for item in SEEDED_STAFF:
-        user = session.query(User).filter(User.username == item["username"]).one_or_none()
-        if user is None or not verify_password(item["password"], user.password_hash):
+    alphabet = string.ascii_letters + string.digits
+    symbols = "!@#%^*-_=+?"
+    while True:
+        body = [secrets.choice(alphabet) for _ in range(length - 2)]
+        body.append(secrets.choice(string.digits))
+        body.append(secrets.choice(symbols))
+        secrets.SystemRandom().shuffle(body)
+        candidate = "".join(body)
+        try:
+            return validate_password(candidate)
+        except PasswordError:
             continue
-        found.append(
-            {
-                "username": item["username"],
-                "password": item["password"],
-                "role": item["role"],
-                "title": item["title"],
-                "hint": item["hint"],
-            }
-        )
-    return found
 
 
-def ensure_staff_accounts(session: Session) -> None:
+def _matches_legacy(user: User) -> bool:
+    return any(verify_password(item, user.password_hash) for item in LEGACY_PUBLIC_PASSWORDS)
+
+
+def credentials_path():
+    return settings.data_dir / "initial_credentials.txt"
+
+
+def _write_credentials(issued: list[tuple[str, str, str]]) -> None:
+    """Новые стартовые пароли: один раз в консоль и в файл data/initial_credentials.txt (права 0600)."""
+    from app.crypto import restrict_file
+
+    path = credentials_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#") and "\t" in line:
+                existing[line.split("\t", 1)[0]] = line
+    for username, role, password in issued:
+        existing[username] = f"{username}\t{role}\t{password}"
+    header = (
+        "# Стартовые пароли РечьКонтроль. При первом входе программа потребует сменить пароль.\n"
+        "# После смены строка удаляется, пустой файл удаляется целиком.\n"
+        "# логин\tроль\tпароль\n"
+    )
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(header + "\n".join(existing.values()) + "\n")
+    restrict_file(path)
+    lines = ["", "=" * 64, "Стартовые учётные записи (показываются один раз):"]
+    for username, role, password in issued:
+        lines.append(f"  {role:<9} логин: {username}   пароль: {password}")
+    lines += [f"Копия сохранена в {path} (только для владельца).", "При первом входе пароль нужно сменить.", "=" * 64, ""]
+    print("\n".join(lines), flush=True)
+
+
+def forget_initial_credentials(username: str) -> None:
+    path = credentials_path()
+    if not path.exists():
+        return
+    try:
+        kept = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#") and line.split("\t", 1)[0] != username
+        ]
+        if not kept:
+            path.unlink(missing_ok=True)
+            return
+        fd = os.open(path, os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("# логин\tроль\tпароль\n" + "\n".join(kept) + "\n")
+    except OSError:
+        log.exception("initial credentials cleanup failed")
+
+
+def _issue(user: User, issued: list[tuple[str, str, str]], password: str | None = None) -> None:
+    secret = password or generate_password()
+    user.password_hash = hash_password(secret)
+    user.must_change_password = 1
+    user.token_version = int(user.token_version or 1) + 1
+    issued.append((user.username, user.role, secret))
+
+
+def ensure_staff_accounts(session: Session) -> list[tuple[str, str, str]]:
+    """Создаёт администратора и демо-оператора со случайными паролями.
+
+    Пароли из старых инструкций (LEGACY_PUBLIC_PASSWORDS) заменяются на случайные.
+    Возвращает выданные пароли, чтобы их можно было проверить в тестах.
+    """
     from app.models import Operator
 
-    admin = ensure_admin(session)
-    if verify_password(PUBLIC_BOOTSTRAP_PASSWORD, admin.password_hash):
-        admin.password_hash = hash_password(SEEDED_STAFF[0]["password"])
-        admin.token_version = int(admin.token_version or 1) + 1
-    person = session.query(Operator).filter(Operator.external_id == "OP-104").one_or_none()
-    user = session.query(User).filter(User.username == "operator").one_or_none()
+    issued: list[tuple[str, str, str]] = []
+    admin = ensure_admin(session, issued)
+    if admin.password_hash and _matches_legacy(admin):
+        _issue(admin, issued)
+    person = session.query(Operator).filter(Operator.external_id == DEMO_OPERATOR_EXTERNAL_ID).one_or_none()
+    user = session.query(User).filter(User.username == DEMO_OPERATOR_USERNAME).one_or_none()
     if user is None:
         user = User(
-            username="operator",
-            password_hash=hash_password(SEEDED_STAFF[1]["password"]),
+            username=DEMO_OPERATOR_USERNAME,
+            password_hash="",
             role="operator",
             is_active=1,
             token_version=1,
             operator_id=person.id if person is not None else None,
         )
         session.add(user)
+        _issue(user, issued)
         session.flush()
-        return
-    if user.role == "operator" and user.operator_id is None and person is not None:
-        user.operator_id = person.id
+    else:
+        if user.role == "operator" and user.operator_id is None and person is not None:
+            user.operator_id = person.id
+        if _matches_legacy(user):
+            _issue(user, issued)
+    if issued:
+        session.flush()
+        _write_credentials(issued)
+    return issued
 
 
-def ensure_admin(session: Session) -> User:
+def ensure_admin(session: Session, issued: list[tuple[str, str, str]] | None = None) -> User:
     user = session.query(User).filter(User.username == settings.admin_username).one_or_none()
     if user is None:
         user = User(
             username=settings.admin_username,
-            password_hash=hash_password(settings.admin_password),
+            password_hash="",
             role="admin",
             is_active=1,
             token_version=1,
         )
         session.add(user)
+        bucket = issued if issued is not None else []
+        _issue(user, bucket, settings.admin_password or None)
         session.flush()
+        if issued is None:
+            _write_credentials(bucket)
         return user
     if user.is_active is None:
         user.is_active = 1

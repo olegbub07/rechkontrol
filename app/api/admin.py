@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_admin
 from app.audit import write_audit
-from app.auth import hash_password, uses_public_bootstrap
+from app.auth import hash_password, needs_password_change
 from app.config import settings
 from app.db import db_guard_status
 from app.models import AuditLog, Call, Operator, User
@@ -24,7 +24,7 @@ def _out(user: User) -> UserOut:
         role=user.role,
         is_active=bool(user.is_active),
         last_login_at=user.last_login_at,
-        must_change_password=uses_public_bootstrap(user),
+        must_change_password=needs_password_change(user),
         operator_id=user.operator_id,
     )
 
@@ -62,7 +62,7 @@ def posture(session: Session = Depends(db_session), _: User = Depends(require_ad
     guard = db_guard_status()
     return {
         "loopback_only": (not settings.allow_remote) and settings.app_host in {"127.0.0.1", "localhost", "::1"},
-        "bootstrap_active": any(uses_public_bootstrap(user) for user in admins),
+        "bootstrap_active": any(needs_password_change(user) for user in admins),
         "login_lock_persisted": True,
         "logout_revokes_until_expiry": True,
         "db": guard,
@@ -98,6 +98,7 @@ def create_user(
         is_active=1,
         token_version=1,
         operator_id=linked,
+        must_change_password=1,
     )
     session.add(user)
     session.flush()
@@ -165,6 +166,7 @@ def reset_password(
     except PasswordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     user.password_hash = hash_password(password)
+    user.must_change_password = 0 if user.id == admin.id else 1
     user.token_version = int(user.token_version or 1) + 1
     write_audit(session, "user.password", user=admin, detail=user.username, request=request)
     session.flush()
