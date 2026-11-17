@@ -70,6 +70,8 @@ Authorization: Bearer <token>
 | GET | `/export/csv` | фильтры `operator_id`, `date_from`, `date_to` |
 | GET | `/export/json` | те же фильтры; `full=true` — с расшифровками (только admin); `unmasked=true` вместе с `full` снимает маску и пишется в журнал |
 
+| GET | `/reports/operator/{id}.pdf?date_from=ГГГГ-ММ-ДД&date_to=ГГГГ-ММ-ДД` | PDF-отчёт по оператору (admin, analyst; по умолчанию последние 30 дней, период до 366 дней), пишется в журнал `report.operator` |
+
 Выгрузка отдаёт не больше 5000 строк.
 
 Колонки CSV (UTF-8 BOM):

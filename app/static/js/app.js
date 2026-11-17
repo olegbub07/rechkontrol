@@ -1073,6 +1073,7 @@ async function renderExport(view) {
   $("#ex [name=json]").onclick = () => download("/export/json?" + qs());
   const fullExport = $("#ex [name=full]");
   if (fullExport) fullExport.onclick = () => download("/export/json?full=true&" + qs());
+  if (typeof mountPdfReport === "function") mountPdfReport(view, ops);
 }
 
 function datasetStatusRu(status) {

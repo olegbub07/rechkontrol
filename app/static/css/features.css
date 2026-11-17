@@ -41,3 +41,6 @@
 .cmp-sub { font-family: var(--serif); font-size: 17px; margin: 20px 0 8px; }
 .cmp-team { display: grid; gap: 8px; }
 .cmp-mistake { display: grid; grid-template-columns: 220px minmax(120px, 1fr) 110px; gap: 12px; align-items: center; font-size: 13px; }
+
+.small-btn { padding: 4px 10px; font-size: 11px; min-height: 0; }
+.pdf-quick { align-self: flex-end; }

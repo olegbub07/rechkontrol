@@ -17,5 +17,6 @@ httpx==0.28.1
 jiwer==3.0.5
 datasets==3.2.0
 psycopg[binary]==3.2.13
+reportlab==5.1.0
 pytest==8.3.4
 pytest-asyncio==0.25.0

@@ -238,13 +238,14 @@ async function mountOperatorCompare(view) {
       <td>${sparkline(o.trend)}</td>
       <td>${o.violation_pct == null ? "—" : o.violation_pct.toFixed(0) + "%"}</td>
       <td class="mistakes">${mistakeChips(o.top_mistakes)}</td>
+      ${self ? "" : `<td><button class="btn ghost small-btn" type="button" data-pdf="${o.id}" title="PDF-отчёт за период дашборда">PDF</button></td>`}
     </tr>`).join("");
   const team = data.team;
   card.innerHTML = `
     <h2>${self ? "Моя динамика" : "Сравнение операторов"}</h2>
     <p class="chart-lead">${self ? "Ваш средний балл по неделям и пункты чек-листа, которые чаще всего не выполнены." : "Рейтинг по среднему баллу, тренд по неделям (линия - цель 80) и самые частые ошибки каждого оператора."} Период как у дашборда.</p>
     ${rows ? `<div class="table-scroll cmp-scroll"><table class="cmp-table">
-      <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th>Нарушения</th><th>Частые ошибки</th></tr></thead>
+      <thead><tr>${self ? "" : "<th>#</th>"}<th>Оператор</th><th>Звонков</th><th>Итог</th><th>К пред. неделе</th><th>Тренд</th><th>Нарушения</th><th>Частые ошибки</th>${self ? "" : "<th></th>"}</tr></thead>
       <tbody>${rows}</tbody></table></div>` : `<p class="empty">Нет оценённых звонков с оператором за период</p>`}
     ${team && team.top_mistakes.length ? `<h3 class="cmp-sub">Частые ошибки команды</h3>
       <div class="cmp-team">${team.top_mistakes.map((m) => `
@@ -253,4 +254,81 @@ async function mountOperatorCompare(view) {
   const cards = view.querySelectorAll(":scope > .card");
   const last = cards[cards.length - 1];
   if (last) view.insertBefore(card, last); else view.appendChild(card);
+  const span = { "7d": 6, "30d": 29, all: 365 }[period];
+  card.querySelectorAll("[data-pdf]").forEach((b) => {
+    b.onclick = () => downloadOperatorPdf(b.dataset.pdf, daysAgo(span), isoDay(new Date()), b);
+  });
+}
+
+/* ---------- PDF-отчёт по оператору ---------- */
+
+function isoDay(d) {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return z.toISOString().slice(0, 10);
+}
+
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return isoDay(d);
+}
+
+async function downloadOperatorPdf(operatorId, dateFrom, dateTo, button) {
+  if (button) button.disabled = true;
+  try {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set("date_from", dateFrom);
+    if (dateTo) p.set("date_to", dateTo);
+    const res = await api(`/reports/operator/${operatorId}.pdf?${p.toString()}`, { raw: true });
+    const blob = await res.blob();
+    const dispo = res.headers.get("content-disposition") || "";
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(dispo);
+    const plain = /filename="?([^";]+)"?/i.exec(dispo);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = star ? decodeURIComponent(star[1]) : plain ? plain[1] : "report.pdf";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    toast("PDF-отчёт сформирован");
+  } catch (err) {
+    toast(err.message, true);
+  }
+  if (button) button.disabled = false;
+}
+
+function mountPdfReport(view, ops) {
+  if (state.user?.role === "operator") return;
+  const card = document.createElement("div");
+  card.className = "card mt";
+  card.innerHTML = `
+    <h2>PDF-отчёт по оператору</h2>
+    <p class="lead">Сводка метрик в сравнении с командой, тренд по неделям, частые ошибки с советами и примеры звонков с маской персональных данных. Файл собирается на этой машине.</p>
+    <form id="pdf-rep" class="toolbar">
+      <label>Оператор
+        <select name="operator_id" required>${(ops || []).map((o) => `<option value="${o.id}">${escapeHtml(o.name)}${o.external_id ? ` · ${escapeHtml(o.external_id)}` : ""}</option>`).join("")}</select>
+      </label>
+      <label>С <input type="date" name="date_from" value="${daysAgo(29)}" required /></label>
+      <label>По <input type="date" name="date_to" value="${isoDay(new Date())}" required /></label>
+      <div class="seg pdf-quick">
+        <button type="button" data-days="6">7 дней</button>
+        <button type="button" data-days="29">30 дней</button>
+        <button type="button" data-days="89">90 дней</button>
+      </div>
+      <button class="btn gold row" type="submit">Скачать PDF</button>
+    </form>
+    ${(ops || []).length ? "" : `<p class="empty">Нет операторов</p>`}`;
+  view.appendChild(card);
+  const form = $("#pdf-rep", card);
+  form.querySelectorAll("[data-days]").forEach((b) => {
+    b.onclick = () => {
+      form.date_from.value = daysAgo(Number(b.dataset.days));
+      form.date_to.value = isoDay(new Date());
+    };
+  });
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    if (!form.operator_id.value) return;
+    if (form.date_from.value > form.date_to.value) { toast("Начало периода позже конца", true); return; }
+    downloadOperatorPdf(form.operator_id.value, form.date_from.value, form.date_to.value, form.querySelector("[type=submit]"));
+  };
 }
