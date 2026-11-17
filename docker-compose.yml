@@ -3,6 +3,9 @@
 #   2. docker compose up -d --build
 #   3. Стартовые пароли кабинета: docker compose logs app
 #      или docker compose exec app cat data/initial_credentials.txt
+# Оценка локальной LLM (необязательно): в .env LLM_PROVIDER=ollama, затем
+#   docker compose --profile llm up -d --build
+#   docker compose exec ollama ollama pull qwen2.5:7b-instruct
 # Оба порта открыты только на 127.0.0.1 этой машины.
 
 services:
@@ -35,6 +38,11 @@ services:
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float32}
       PII_MASKING: ${PII_MASKING:-true}
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
+      # ollama - сервис этой же compose-сети на этой машине, наружу текст не уходит.
+      # Поэтому для него снят запрет на нелокальный адрес.
+      OLLAMA_URL: http://ollama:11434
+      LLM_ALLOW_REMOTE: "true"
     volumes:
       # ключ шифрования аудио, JWT-секрет, аудио, модели Whisper и стартовые пароли.
       # Именованный том, а не ./data: каталог ./data Docker создал бы от root,
@@ -43,8 +51,18 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # порт не публикуется: Ollama доступна только приложению внутри compose-сети
+
 volumes:
   pgdata:
     driver: local
   appdata:
+    driver: local
+  ollama:
     driver: local
