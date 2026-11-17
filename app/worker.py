@@ -111,7 +111,7 @@ def process_call(call_id: int) -> None:
         )
         del audio, stereo
         report = analyze(turns, company_phrases=company, extra_script_phrases=extra, checklist=checklist)
-        report = llm_enrich(report, turns)
+        report = llm_enrich(report, turns, checklist)
         full_text = " ".join(t["text"] for t in turns).strip()
         payload = report_to_json(report)
         with write_lock, SessionLocal() as session:

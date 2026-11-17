@@ -15,11 +15,14 @@ from urllib.parse import urlparse
 
 from app.config import settings
 from app.pii import mask_segments, mask_text
+from app.checklist import CATEGORIES, default_checklist
 from app.quality import CheckResult, QualityReport, _clip
 
 log = logging.getLogger("rechkontrol.llm")
 
 METRICS = ("politeness", "completeness", "script_compliance", "resolution")
+# метрика отчёта -> ключ группы в чек-листе
+METRIC_CATEGORY = {"politeness": "politeness", "completeness": "completeness", "script_compliance": "script", "resolution": "resolution"}
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MAX_CHARS = 12000
 # Ответ - короткий JSON (около 110 токенов). Потолок не даёт модели генерировать до таймаута:
@@ -48,7 +51,31 @@ def _url_allowed(url: str) -> bool:
     return parsed.hostname in LOCAL_HOSTS or settings.llm_allow_remote
 
 
-def build_prompt(turns: list[dict], report: QualityReport) -> str:
+def category_weights(checklist: dict | None) -> dict[str, float]:
+    """Веса групп из чек-листа, как в правилах. Метрика отчёта -> нормированный вес."""
+    cw = (checklist or default_checklist()).get("category_weights") or {}
+    raw = {m: max(0.0, float(cw.get(cat, 0) or 0)) for m, cat in METRIC_CATEGORY.items()}
+    total = sum(raw.values())
+    if total <= 0:
+        return {m: 0.25 for m in METRICS}
+    return {m: w / total for m, w in raw.items()}
+
+
+def criteria_brief(checklist: dict | None) -> str:
+    """Включённые критерии с весами: модель оценивает по тем же пунктам, что и правила."""
+    cl = checklist or default_checklist()
+    weights = category_weights(cl)
+    lines = []
+    for metric, cat in METRIC_CATEGORY.items():
+        rows = [r for r in cl.get("criteria", []) if r.get("category") == cat and r.get("enabled", True) and float(r.get("weight", 0)) > 0]
+        if not rows:
+            continue
+        items = "; ".join(f"{r['title']} (вес {float(r['weight']):g})" for r in rows)
+        lines.append(f"{metric} [{CATEGORIES[cat]}, доля в итоге {weights[metric]:.0%}]: {items}")
+    return "\n".join(lines)
+
+
+def build_prompt(turns: list[dict], report: QualityReport, checklist: dict | None = None) -> str:
     lines = []
     for turn in mask_segments([t for t in turns if isinstance(t, dict)]):
         who = "Оператор" if turn.get("role") == "operator" else "Клиент"
@@ -59,7 +86,14 @@ def build_prompt(turns: list[dict], report: QualityReport) -> str:
     # Оценки правил в промпт не передаются: на замерах qwen2.5:3b в 4 из 6 звонков
     # просто копировал их, и смешивание теряло смысл. Модель должна оценивать сама.
     del report
-    return f"Расшифровка звонка:\n{dialog}"
+    brief = criteria_brief(checklist)
+    head = (
+        "Критерии оценки (учитывай только их, отключённые пункты не оценивай, важнее пункты с большим весом):\n"
+        f"{brief}\n\n"
+        if brief
+        else ""
+    )
+    return f"{head}Расшифровка звонка:\n{dialog}"
 
 
 def parse_answer(text: str) -> dict | None:
@@ -125,17 +159,19 @@ def ask_ollama(prompt: str) -> dict | None:
     return parse_answer(content)
 
 
-def blend(report: QualityReport, answer: dict) -> QualityReport:
-    """Смешивает оценки правил и LLM (вес LLM_WEIGHT) и добавляет советы модели."""
+def blend(report: QualityReport, answer: dict, checklist: dict | None = None) -> QualityReport:
+    """Смешивает оценки правил и LLM (вес LLM_WEIGHT) и добавляет советы модели.
+
+    Итог считается с теми же весами групп, что и в правилах (из чек-листа), а штраф
+    за грубость переносится как есть: модель не может «отмыть» мат в звонке."""
     weight = max(0.0, min(1.0, float(settings.llm_weight)))
+    cw = category_weights(checklist)
     out = copy.deepcopy(report)
     for metric in METRICS:
         setattr(out, metric, _clip((1 - weight) * getattr(report, metric) + weight * answer[metric]))
-    base = 0.28 * report.politeness + 0.22 * report.completeness + 0.25 * report.script_compliance + 0.25 * report.resolution
+    base = sum(cw[m] * getattr(report, m) for m in METRICS)
     penalty = (report.overall / base) if base > 0 and report.overall < _clip(base) - 0.5 else 1.0
-    out.overall = _clip(
-        (0.28 * out.politeness + 0.22 * out.completeness + 0.25 * out.script_compliance + 0.25 * out.resolution) * penalty
-    )
+    out.overall = _clip(sum(cw[m] * getattr(out, m) for m in METRICS) * penalty)
     extra = [f"ИИ: {item}" for item in answer["recommendations"] if item not in out.recommendations]
     out.recommendations = extra + list(out.recommendations)
     if answer["summary"]:
@@ -155,10 +191,10 @@ def blend(report: QualityReport, answer: dict) -> QualityReport:
     return out
 
 
-def enrich(report: QualityReport, turns: list[dict]) -> QualityReport:
+def enrich(report: QualityReport, turns: list[dict], checklist: dict | None = None) -> QualityReport:
     if not enabled() or not turns:
         return report
-    answer = ask_ollama(build_prompt(turns, report))
+    answer = ask_ollama(build_prompt(turns, report, checklist))
     if answer is None:
         return report
-    return blend(report, answer)
+    return blend(report, answer, checklist)
