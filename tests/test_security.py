@@ -504,3 +504,9 @@ def test_database_url_choice(monkeypatch):
     monkeypatch.setattr("app.db.settings.database_url", "mysql://u:p@h/x")
     with _pytest.raises(RuntimeError):
         db.database_url()
+
+
+def test_default_compute_type_is_float32():
+    from app.config import Settings
+
+    assert Settings(_env_file=None).whisper_compute_type == "float32"

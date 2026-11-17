@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     whisper_model: str = "base"
     whisper_device: str = "cpu"
-    whisper_compute_type: str = "int8"
+    whisper_compute_type: str = "float32"
     max_parallel_jobs: int = 1
     max_upload_mb: int = 80
     max_upload_files: int = 20

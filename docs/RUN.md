@@ -39,7 +39,7 @@ WinError 10048 — это занятый порт, не ошибка кода.
 | `TRUSTED_PROXIES` | адреса reverse-proxy, от которых принимается `X-Forwarded-For` | пусто |
 | `WHISPER_MODEL` | `tiny`, `base`, `small`, … | `base` |
 | `WHISPER_DEVICE` | `cpu` или `cuda` | `cpu` |
-| `WHISPER_COMPUTE_TYPE` | `int8` на CPU | `int8` |
+| `WHISPER_COMPUTE_TYPE` | `float32`, `int8_float32` или `int8`; int8 быстрее, но проверьте WER (docs/PERFORMANCE.md) | `float32` |
 | `MAX_PARALLEL_JOBS` | слоты очереди | `1` |
 | `MAX_UPLOAD_MB` | размер файла | `80` |
 | `MAX_DURATION_SEC` | лимит длины | `900` (15 мин) |
