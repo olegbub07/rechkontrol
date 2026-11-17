@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -17,7 +18,7 @@ class AudioError(ValueError):
 def sniff_audio(header: bytes, filename: str) -> str:
     ext = Path(filename).suffix.lower()
     if ext not in settings.allowed_audio_ext:
-        raise AudioError("Поддерживаются WAV, MP3 и OGG.")
+        raise AudioError("Поддерживаются WAV, MP3, OGG, FLAC и M4A.")
     if len(header) < 12:
         raise AudioError("Файл слишком короткий или повреждён.")
     if ext == ".wav":
@@ -47,8 +48,31 @@ def _ffmpeg() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
+def parse_ffmpeg_duration(stderr: str) -> float | None:
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr or "")
+    if not match:
+        return None
+    hours, minutes, seconds = int(match.group(1)), int(match.group(2)), float(match.group(3))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _probe_duration(src: Path) -> float | None:
+    cmd = [_ffmpeg(), "-hide_banner", "-i", str(src)]
+    kwargs: dict = {"capture_output": True, "text": True, "timeout": 20}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(cmd, **kwargs)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return parse_ffmpeg_duration(proc.stderr or "")
+
+
 def to_wav_mono_16k(src: Path, dst: Path, max_duration_sec: int | None = None) -> float:
     limit = max_duration_sec if max_duration_sec is not None else settings.max_duration_sec
+    probed = _probe_duration(src)
+    if probed is not None and probed > limit + 0.05:
+        raise AudioError(f"Длительность записи больше {limit // 60} минут.")
     dst.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         _ffmpeg(),
@@ -58,30 +82,33 @@ def to_wav_mono_16k(src: Path, dst: Path, max_duration_sec: int | None = None) -
         "-loglevel",
         "error",
         "-t",
-        str(int(limit)),
+        str(int(limit) + 2),
         "-i",
         str(src),
+        "-vn",
         "-ac",
         "1",
         "-ar",
         "16000",
-        "-sample_fmt",
-        "s16",
+        "-c:a",
+        "pcm_s16le",
         str(dst),
     ]
     kwargs: dict = {}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, **kwargs)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise AudioError("Превышено время декодирования аудио.") from exc
     if proc.returncode != 0 or not dst.exists():
-        raise AudioError("Не удалось декодировать аудио. Проверьте, что это WAV, MP3 или OGG.")
+        dst.unlink(missing_ok=True)
+        raise AudioError("Не удалось декодировать аудио. Проверьте, что это WAV, MP3, OGG, FLAC или M4A.")
     info = sf.info(str(dst))
     duration = float(info.duration)
-    if duration > limit + 1:
+    if duration > limit + 0.05 or duration < 0.4:
+        dst.unlink(missing_ok=True)
+        if duration < 0.4:
+            raise AudioError("Запись слишком короткая.")
         raise AudioError(f"Длительность записи больше {limit // 60} минут.")
-    if duration < 0.4:
-        raise AudioError("Запись слишком короткая.")
     return duration

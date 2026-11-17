@@ -3,8 +3,8 @@ Set-Location $PSScriptRoot
 if (-not (Test-Path .venv)) {
     python -m venv .venv
 }
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+& .\.venv\Scripts\python.exe -m pip install -q -r requirements.txt
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
 }
-& .\.venv\Scripts\python.exe run.py
+& .\.venv\Scripts\python.exe run.py @args

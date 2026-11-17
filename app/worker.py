@@ -7,8 +7,6 @@ import time
 import uuid
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
 from app.audio import AudioError, to_wav_mono_16k
 from app.config import settings
 from app.crypto import decrypt_file
@@ -25,11 +23,6 @@ log = logging.getLogger("rechkontrol.worker")
 _stop = threading.Event()
 _claim_lock = threading.Lock()
 _threads: list[threading.Thread] = []
-
-
-def _set_progress(session: Session, call: Call, value: int) -> None:
-    call.progress = max(call.progress, min(value, 99))
-    session.commit()
 
 
 def claim_next() -> int | None:
@@ -49,11 +42,19 @@ def claim_next() -> int | None:
         return call.id
 
 
+def _touch_progress(call_id: int, value: int) -> None:
+    with write_lock, SessionLocal() as session:
+        current = session.get(Call, call_id)
+        if current and current.status == "processing":
+            current.progress = max(current.progress, min(value, 99))
+            session.commit()
+
+
 def process_call(call_id: int) -> None:
     started = time.time()
     tmp_src: Path | None = None
     tmp_wav: Path | None = None
-    with SessionLocal() as session:
+    with write_lock, SessionLocal() as session:
         call = session.get(Call, call_id)
         if call is None:
             return
@@ -62,34 +63,50 @@ def process_call(call_id: int) -> None:
             call.error_message = "Нет аудиофайла для обработки."
             session.commit()
             return
-        token = uuid.uuid4().hex
-        tmp_src = safe_tmp_path(f"{token}_src")
-        tmp_wav = safe_tmp_path(f"{token}.wav")
-        try:
-            enc_path = safe_audio_path(call.stored_name)
-            _set_progress(session, call, 10)
-            decrypt_file(enc_path, tmp_src)
-            _set_progress(session, call, 18)
-            duration = to_wav_mono_16k(tmp_src, tmp_wav)
+        stored_name = call.stored_name
+        operator_first = bool(call.operator_first)
+        call.progress = 8
+        session.commit()
+
+    token = uuid.uuid4().hex
+    tmp_src = safe_tmp_path(f"{token}_src")
+    tmp_wav = safe_tmp_path(f"{token}.wav")
+    last_tick = 0.0
+
+    def on_progress(pct: int) -> None:
+        nonlocal last_tick
+        now = time.monotonic()
+        if pct < 88 and now - last_tick < 1.2:
+            return
+        last_tick = now
+        _touch_progress(call_id, pct)
+
+    try:
+        enc_path = safe_audio_path(stored_name)
+        on_progress(12)
+        decrypt_file(enc_path, tmp_src)
+        on_progress(18)
+        duration = to_wav_mono_16k(tmp_src, tmp_wav)
+        with write_lock, SessionLocal() as session:
+            call = session.get(Call, call_id)
+            if call is None or call.status != "processing":
+                return
             call.duration_sec = duration
+            call.progress = 20
             session.commit()
-
-            def on_progress(pct: int) -> None:
-                with SessionLocal() as inner:
-                    current = inner.get(Call, call_id)
-                    if current and current.status == "processing":
-                        current.progress = pct
-                        inner.commit()
-
-            raw, lang = transcribe_wav(tmp_wav, duration=duration, progress=on_progress)
             script = load_script(session)
-            turns = from_whisper(raw, operator_first=bool(call.operator_first))
-            report = analyze(
-                turns,
-                company_phrases=script["company_phrases"],
-                extra_script_phrases=script["extra_script_phrases"],
-            )
-            full_text = " ".join(t["text"] for t in turns).strip()
+            company = list(script["company_phrases"])
+            extra = list(script["extra_script_phrases"])
+        raw, lang, audio, sr = transcribe_wav(tmp_wav, duration=duration, progress=on_progress)
+        turns = from_whisper(raw, operator_first=operator_first, audio=audio, sr=sr)
+        del audio
+        report = analyze(turns, company_phrases=company, extra_script_phrases=extra)
+        full_text = " ".join(t["text"] for t in turns).strip()
+        payload = report_to_json(report)
+        with write_lock, SessionLocal() as session:
+            call = session.get(Call, call_id)
+            if call is None or call.status != "processing":
+                return
             if call.transcript:
                 session.delete(call.transcript)
                 session.flush()
@@ -104,7 +121,6 @@ def process_call(call_id: int) -> None:
                     language=lang,
                 )
             )
-            payload = report_to_json(report)
             session.add(
                 Quality(
                     call_id=call.id,
@@ -123,24 +139,29 @@ def process_call(call_id: int) -> None:
                 )
             )
             call.language = lang
+            call.duration_sec = duration
             call.status = "done"
             call.progress = 100
             call.processed_sec = round(time.time() - started, 2)
             call.error_message = None
             session.commit()
             log.info("call %s done in %.1fs, overall=%.1f", call_id, call.processed_sec, report.overall)
-        except Exception as exc:
-            log.exception("call %s failed", call_id)
+    except Exception as exc:
+        log.exception("call %s failed", call_id)
+        with write_lock, SessionLocal() as session:
+            call = session.get(Call, call_id)
+            if call is None:
+                return
             call.status = "error"
             if isinstance(exc, (AudioError, ValueError)):
                 call.error_message = str(exc)[:400]
             else:
                 call.error_message = "Обработка не удалась. Проверьте файл и повторите попытку."
             session.commit()
-        finally:
-            for item in (tmp_src, tmp_wav):
-                if item is not None:
-                    item.unlink(missing_ok=True)
+    finally:
+        for item in (tmp_src, tmp_wav):
+            if item is not None:
+                item.unlink(missing_ok=True)
 
 
 def _loop() -> None:
@@ -165,6 +186,7 @@ def recover_stale_jobs() -> None:
 
 
 def start_workers() -> None:
+    _threads[:] = [t for t in _threads if t.is_alive()]
     if _threads:
         return
     recover_stale_jobs()
@@ -179,3 +201,6 @@ def start_workers() -> None:
 
 def stop_workers() -> None:
     _stop.set()
+    for thread in list(_threads):
+        thread.join(timeout=3)
+    _threads[:] = [thread for thread in _threads if thread.is_alive()]

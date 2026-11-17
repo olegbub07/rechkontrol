@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.demo_calls import DEMO_CALLS, DEMO_OPERATORS
-from app.models import Call, Operator, Quality, Transcript
+from app.models import Call, Operator, Quality, Setting, Transcript
 from app.quality import analyze, report_to_json
 from app.settings_store import DEFAULTS, put_json
 
@@ -16,8 +16,10 @@ def seed_if_empty(session: Session) -> None:
         for item in DEMO_OPERATORS:
             session.add(Operator(name=item["name"], external_id=item["external_id"]))
         session.flush()
-    put_json(session, "company_phrases", DEFAULTS["company_phrases"])
-    put_json(session, "extra_script_phrases", DEFAULTS["extra_script_phrases"])
+    if session.get(Setting, "company_phrases") is None:
+        put_json(session, "company_phrases", DEFAULTS["company_phrases"])
+    if session.get(Setting, "extra_script_phrases") is None:
+        put_json(session, "extra_script_phrases", DEFAULTS["extra_script_phrases"])
     if session.query(Call).count() > 0:
         return
     ops = {o.external_id: o for o in session.query(Operator).all()}

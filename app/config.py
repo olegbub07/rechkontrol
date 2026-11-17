@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     max_upload_files: int = 20
     max_duration_sec: int = 900
     jwt_ttl_hours: int = 12
+    allow_remote: bool = False
+    whisper_beam_size: int = 5
+    whisper_batch_size: int = 8
+    whisper_cpu_threads: int = 0
     allowed_audio_ext: tuple[str, ...] = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a")
 
     @property
@@ -54,6 +58,10 @@ class Settings(BaseSettings):
     @property
     def models_dir(self) -> Path:
         return self.data_dir / "models"
+
+    @property
+    def dataset_dir(self) -> Path:
+        return self.data_dir / "datasets" / "minds14_ru"
 
 
 settings = Settings()

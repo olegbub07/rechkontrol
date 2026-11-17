@@ -706,7 +706,7 @@ def analyze(
     who = op_name_m.group(1).title() if op_name_m else "Оператор"
     outcome = "вопрос закрыт" if res_hit and not hanging else "вопрос требует доработки"
     summary = (
-        f"{who} провёл консультацию по теме «{topic}». "
+        f"{who} {'провела' if who.endswith(('а', 'я')) else 'провёл'} консультацию по теме «{topic}». "
         f"Вежливость {politeness:.0f}, скрипт {script:.0f}, решение {resolution:.0f}. "
         f"Итог: {outcome}. Тональность — {_tonality_ru(tonality)}."
     )

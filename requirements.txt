@@ -14,5 +14,7 @@ imageio-ffmpeg==0.5.1
 faster-whisper==1.1.1
 requests==2.32.3
 httpx==0.28.1
+jiwer==3.0.5
+datasets==3.2.0
 pytest==8.3.4
 pytest-asyncio==0.25.0

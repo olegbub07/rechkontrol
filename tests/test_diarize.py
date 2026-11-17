@@ -25,6 +25,20 @@ def test_label_speakers_splits_on_pause():
     assert labeled[0]["speaker"] != labeled[1]["speaker"]
 
 
+def test_classify_keeps_operator_and_client_turns():
+    from app.diarize import classify_turns
+
+    turns = [
+        {"start": 0, "end": 5, "text": "Добрый день, банк Центр-инвест, меня зовут Елена. Чем могу помочь?"},
+        {"start": 7, "end": 12, "text": "Здравствуйте. Хочу открыть расчётный счёт для ИП."},
+        {"start": 13, "end": 15, "text": "Подскажите, какие документы нужны?"},
+        {"start": 17, "end": 22, "text": "Конечно, помогу. Уточните, пожалуйста."},
+    ]
+    out = classify_turns(turns, operator_first=True)
+    assert out[0]["role"] == "operator"
+    assert any(t["role"] == "client" and "хочу открыть" in t["text"].lower() for t in out)
+
+
 def test_assign_roles_fallback_first_speaker():
     turns = assign_roles(
         [
