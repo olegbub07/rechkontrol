@@ -95,6 +95,25 @@ _MONTH_ONLY = re.compile(rf"(?i)(?<![\w])(?:{_MONTHS})(?![\w])")
 _YEAR_ONLY = re.compile(r"(?<![\d\w])(?:19|20)\d{2}(?![\d\w])")
 
 
+_SENTENCE_SPLIT = re.compile(r"[.!?…]\s+")
+
+
+_REQUEST = re.compile(r"(?i)\?|назов|продикт|подскаж|уточн|сообщ|скаж|какой|какие|какая|напомн")
+
+
+def _own_question(before: str) -> str:
+    """Текущая фраза и предыдущая, если та была вопросом или просьбой назвать данные."""
+    parts = _SENTENCE_SPLIT.split(before)
+    tail = parts[-1]
+    if len(parts) > 1:
+        # разделитель съеден split: вопросительный знак ищем в исходном тексте перед текущей фразой
+        prev_end = len(before) - len(tail)
+        prev = parts[-2] + before[prev_end - 2:prev_end]
+        if _REQUEST.search(prev):
+            tail = prev + " " + tail
+    return tail
+
+
 def _asked(prefix: str) -> set[str]:
     window = prefix[-CONTEXT_CHARS:]
     return {kind for kind, rx in _ASK.items() if rx.search(window)}
@@ -154,7 +173,9 @@ def _mask_numbers(text: str, context: str) -> str:
         stripped = raw.rstrip(" ()-\u00a0")
         before = text[: match.start()]
         after = text[match.start() + len(stripped):]
-        asked = _asked(context + " " + before)
+        # Вопрос из своей реплики учитываем только в пределах текущей фразы: «открыть расчётный счёт.
+        # Вежливость 49» - не номер счёта. Вопрос собеседника (context) учитывается целиком.
+        asked = _asked(context + " " + _own_question(before))
         short = len(_digits(stripped)) < 6
         if short and (_UNIT_AFTER.match(after) or _REF_BEFORE.search(before[-40:])):
             continue

@@ -27,6 +27,7 @@ _CREDITS = re.compile(
     r"|корректор\w*\s+[A-ZА-ЯЁ]\.?\s*[A-ZА-ЯЁ]).*$"
 )
 _WORD = re.compile(r"\S+")
+LOOP_DROP = 6
 _STRIP = ".,!?…:;«»\"'()-"
 
 
@@ -45,7 +46,8 @@ def _stutter(token: str) -> bool:
 
 
 def _collapse_ngrams(tokens: list[str], max_n: int = 4) -> list[str]:
-    """Одно слово подряд больше трёх раз или кусок из 2-4 слов три раза и больше - оставляем одно повторение.
+    """Одно слово подряд 4-5 раз или кусок из 2-4 слов три раза и больше - оставляем одно повторение,
+    одно слово 6 раз и больше - убираем целиком.
     «да да да» и «поймите, поймите» это живая речь и не трогаются."""
     out = list(tokens)
     for n in range(1, max_n + 1):
@@ -61,7 +63,9 @@ def _collapse_ngrams(tokens: list[str], max_n: int = 4) -> list[str]:
             while [_norm(t) for t in out[i + reps * n:i + (reps + 1) * n]] == chunk:
                 reps += 1
             if reps >= too_many:
-                result.extend(out[i:i + n])
+                # длинная петля из одного слова («СПОКОЙ» x10) - чистая галлюцинация, не оставляем ничего
+                if not (n == 1 and reps >= LOOP_DROP):
+                    result.extend(out[i:i + n])
                 i += reps * n
             else:
                 result.append(out[i])

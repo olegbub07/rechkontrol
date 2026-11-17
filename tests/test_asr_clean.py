@@ -3,6 +3,7 @@ from app.asr_clean import align_words, clean_text, clean_turns, is_hallucination
 
 def test_repeated_word_loop_is_cut():
     assert clean_text("Это ужасно. СПОКОЙ СПОКОЙ СПОКОЙ СПОКОЙ СПОКОЙ СПППППППППП") == "Это ужасно. СПОКОЙ"
+    assert clean_text("Ищите номер на сайте. " + "СПОКОЙ " * 12 + "СПППППП") == "Ищите номер на сайте."
     assert clean_text("мне нужно мне нужно мне нужно мне нужно закрыть карту") == "мне нужно закрыть карту"
 
 
@@ -20,6 +21,7 @@ def test_subtitle_outros_removed():
 
 def test_words_follow_cleaned_text():
     words = [{"text": w, "start": i, "end": i + 1} for i, w in enumerate(["Да,", "СПОКОЙ", "СПОКОЙ", "СПОКОЙ", "СПОКОЙ", "СППППП"])]
+    assert len(words) == 6
     text = clean_text(" ".join(w["text"] for w in words))
     assert [w["text"] for w in align_words(words, text)] == ["Да,", "СПОКОЙ"]
 

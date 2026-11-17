@@ -230,3 +230,15 @@ def test_no_pii_leaks_via_search_card_export_pdf(tmp_path):
         path.write_bytes(pdf.content)
         text = subprocess.run(["pdftotext", str(path), "-"], capture_output=True).stdout.decode()
         assert not any(x in text for x in ("4419", "1984", "Елена провела"))
+
+
+def test_topic_mention_does_not_mask_scores():
+    from app.pii import mask_text
+
+    summary = "Оператор провёл консультацию по теме «открытие расчётного счёта». Вежливость 49, скрипт 37, решение 32."
+    assert mask_text(summary) == summary
+    text = "Хочу открыть расчётный счёт. Сколько стоит обслуживание, 49 или 37 рублей?"
+    assert mask_text(text) == text
+    # а вопрос в своём же тексте по-прежнему работает
+    assert mask_text("Назовите последние цифры карты. 4419.") == "Назовите последние цифры карты. [КАРТА]."
+    assert mask_text("Последние цифры карты? 4419.") == "Последние цифры карты? [КАРТА]."
