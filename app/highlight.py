@@ -13,7 +13,7 @@ from functools import lru_cache
 
 from app.checklist import CATEGORIES, RUDE_PENALTY, by_id
 from app.pii import PLACEHOLDERS, mask_segments
-from app.quality import DEFAULT_COMPANY, NEG_WORDS, TY_RE
+from app.quality import _PROFANITY_RE, DEFAULT_COMPANY, NEG_WORDS, TY_RE
 
 # Критерии, где найденная фраза в речи оператора - это плюс (подсвечиваем, если пункт пройден).
 POSITIVE_PHRASE = (
@@ -151,6 +151,10 @@ def segment_highlights(
                     note += f", итог умножен на {str(RUDE_PENALTY).replace(".", ",")}"
                 for p in plist:
                     for m in _phrase_re(p).finditer(text):
+                        raw.append((m.start(), m.end(), kind, cid, title, note))
+                if cid == "no_rudeness":
+                    # Мат в оценке ловится по корням, подсвечиваем его так же.
+                    for m in _PROFANITY_RE.finditer(text.lower()):
                         raw.append((m.start(), m.end(), kind, cid, title, note))
             if tutoyage_bad:
                 title, note = _check_text(tutoyage, impact)
