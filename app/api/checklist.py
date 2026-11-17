@@ -54,10 +54,25 @@ def put_checklist(
         clean = validate(body)
     except ChecklistError as exc:
         raise HTTPException(422, str(exc)) from exc
+    raw_w = body.get("category_weights") if isinstance(body, dict) else None
+    normalized = False
+    if isinstance(raw_w, dict):
+        try:
+            normalized = any(abs(float(str(raw_w[k]).replace(",", ".")) - clean["category_weights"][k]) > 0.0005 for k in CATEGORIES)
+        except (TypeError, ValueError, KeyError):
+            normalized = False
     old = load_checklist(session)
+    changes = diff_summary(old, clean)
+    if not changes:
+        # Сохранение без изменений в журнал не пишем.
+        return {**_payload(session), "changed": False, "normalized": normalized, "message": "Изменений нет"}
     save_checklist(session, clean)
-    write_audit(session, "checklist.update", user=user, detail=diff_summary(old, clean), request=request)
-    return _payload(session)
+    write_audit(session, "checklist.update", user=user, detail=changes, request=request)
+    msg = "Чек-лист сохранён. Новые звонки оцениваются по нему"
+    if normalized:
+        cw = clean["category_weights"]
+        msg += ". Веса метрик приведены к сумме 1: " + ", ".join(f"{CATEGORIES[k].lower()} {cw[k]:g}".replace(".", ",") for k in CATEGORIES)
+    return {**_payload(session), "changed": True, "normalized": normalized, "message": msg}
 
 
 @router.post("/checklist/reset")
@@ -65,7 +80,7 @@ def reset_checklist(request: Request, session: Session = Depends(db_session), us
     old = load_checklist(session)
     fresh = default_checklist()
     save_checklist(session, fresh)
-    write_audit(session, "checklist.reset", user=user, detail=diff_summary(old, fresh), request=request)
+    write_audit(session, "checklist.reset", user=user, detail=diff_summary(old, fresh) or "уже был по умолчанию", request=request)
     return _payload(session)
 
 

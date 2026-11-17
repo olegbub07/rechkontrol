@@ -23,6 +23,12 @@ function registerFeatureAudit() {
   if (typeof AUDIT_RU === "object") Object.assign(AUDIT_RU, FEATURE_AUDIT_RU);
 }
 
+function clNumber(raw) {
+  const text = String(raw ?? "").trim().replace(",", ".");
+  if (!text || !/^-?\d+(\.\d+)?$/.test(text)) return null;
+  return Number(text);
+}
+
 async function mountChecklistEditor(view) {
   registerFeatureAudit();
   const isAdmin = state.user?.role === "admin";
@@ -40,13 +46,13 @@ async function mountChecklistEditor(view) {
           : `<span class="muted">${escapeHtml(CHECKLIST_HINTS[c.id] || "считается автоматически")}</span>`;
         return `<tr data-id="${c.id}" class="${c.enabled ? "" : "cl-off"}">
           <td><input type="checkbox" data-f="enabled" ${c.enabled ? "checked" : ""} aria-label="Включить" /></td>
-          <td><input data-f="title" value="${escapeHtml(c.title)}" maxlength="80" /><div class="hint cl-hint"><code>${c.id}</code></div></td>
-          <td><input data-f="weight" type="number" min="0" max="5" step="0.1" value="${c.weight}" class="cl-weight" /></td>
+          <td><input data-f="title" value="${escapeHtml(c.title)}" maxlength="80" aria-label="Название критерия" /><div class="hint cl-hint"><code>${c.id}</code></div></td>
+          <td><input data-f="weight" type="text" inputmode="decimal" value="${c.weight}" class="cl-weight" aria-label="Вес критерия" /></td>
           <td>${phraseCell}</td>
         </tr>`;
       }).join("");
       return `<h3 class="cl-group">${escapeHtml(label)}
-          <label class="cl-catw">вес в итоге <input type="number" min="0" max="1" step="0.01" data-cat="${cat}" value="${cl.category_weights[cat]}" /></label>
+          <label class="cl-catw">доля в итоге <input type="text" inputmode="decimal" data-cat="${cat}" value="${cl.category_weights[cat]}" aria-label="Доля метрики «${escapeHtml(label)}» в итоговой оценке" /></label>
         </h3>
         <div class="table-scroll cl-scroll"><table class="cl-table">
           <thead><tr><th>Вкл.</th><th>Критерий</th><th>Вес</th><th>Ключевые фразы</th></tr></thead>
@@ -57,7 +63,8 @@ async function mountChecklistEditor(view) {
       <p class="eyebrow">Оценка звонка</p>
       <h2>Чек-лист качества</h2>
       <p class="muted">Критерии, их вес внутри метрики, ключевые фразы и вес метрик в итоговой оценке. По умолчанию — встроенные правила. Изменения действуют для новых звонков; уже оценённые можно пересчитать кнопкой ниже (без повторной расшифровки, оценка LLM при пересчёте не повторяется).</p>
-      <form id="cl-form">${groups}
+      <p class="muted">Вес критерия - от 0 до 5, у включённого больше 0. Доля метрики - от 0 до 1; при сохранении доли приводятся к сумме 1 (например, 1, 1, 1, 1 станет по 0,25). Сейчас сумма долей: <b id="cl-sum">${Object.values(cl.category_weights).reduce((a, b) => a + Number(b), 0).toFixed(2).replace(".", ",")}</b>.</p>
+      <form id="cl-form" novalidate>${groups}
         <div class="toolbar mt">
           <button class="btn primary row" type="submit">Сохранить чек-лист</button>
           <button class="btn ghost row" type="button" id="cl-reset">Вернуть по умолчанию</button>
@@ -75,28 +82,57 @@ async function mountChecklistEditor(view) {
     form.querySelectorAll("input[data-f=enabled]").forEach((box) => {
       box.onchange = () => box.closest("tr").classList.toggle("cl-off", !box.checked);
     });
+    const sumBox = $("#cl-sum", card);
+    form.querySelectorAll("input[data-cat]").forEach((el) => {
+      el.oninput = () => {
+        let sum = 0;
+        form.querySelectorAll("input[data-cat]").forEach((x) => { sum += clNumber(x.value) ?? 0; });
+        sumBox.textContent = sum.toFixed(2).replace(".", ",");
+      };
+    });
     form.onsubmit = async (e) => {
       e.preventDefault();
       const err = $("#cl-error", card);
       err.hidden = true;
+      form.querySelectorAll(".cl-bad").forEach((el) => el.classList.remove("cl-bad"));
+      const problems = [];
+      const check = (el, label, min, max, positive) => {
+        const v = clNumber(el.value);
+        let msg = "";
+        if (el.value.trim() === "") msg = `${label}: поле пустое, укажите число`;
+        else if (v === null) msg = `${label}: «${el.value.trim().slice(0, 20)}» не число`;
+        else if (v < min || v > max) msg = `${label}: допустимо от ${String(min).replace(".", ",")} до ${String(max).replace(".", ",")}`;
+        else if (positive && v <= 0) msg = `${label}: должно быть больше 0`;
+        if (msg) { el.classList.add("cl-bad"); problems.push(msg); }
+      };
       const criteria = cl.criteria.map((c) => {
         const row = form.querySelector(`tr[data-id="${c.id}"]`);
-        const out = {
-          id: c.id,
-          enabled: row.querySelector("[data-f=enabled]").checked,
-          title: row.querySelector("[data-f=title]").value.trim(),
-          weight: Number(row.querySelector("[data-f=weight]").value),
-        };
+        const enabled = row.querySelector("[data-f=enabled]").checked;
+        const wEl = row.querySelector("[data-f=weight]");
+        const title = row.querySelector("[data-f=title]").value.trim();
+        check(wEl, `«${title || c.title}», вес`, 0, 5, enabled);
+        const out = { id: c.id, enabled, title, weight: wEl.value.trim() };
         const ta = row.querySelector("[data-f=phrases]");
         if (ta) out.phrases = ta.value.split(/\n+/).map((x) => x.trim()).filter(Boolean);
         return out;
       });
       const weights = {};
-      form.querySelectorAll("input[data-cat]").forEach((el) => { weights[el.dataset.cat] = Number(el.value); });
+      form.querySelectorAll("input[data-cat]").forEach((el) => {
+        check(el, `Доля метрики «${data.categories[el.dataset.cat]}»`, 0, 1, true);
+        weights[el.dataset.cat] = el.value.trim();
+      });
+      if (problems.length) {
+        err.textContent = problems.slice(0, 4).join(". ") + (problems.length > 4 ? ` (и ещё ${problems.length - 4})` : "");
+        err.hidden = false;
+        toast(problems[0], true);
+        form.querySelector(".cl-bad")?.focus();
+        return;
+      }
       try {
+        // Значения уходят как введены: сервер сам проверит их и ответит по-русски.
         const saved = await api("/checklist", { method: "PUT", json: { criteria, category_weights: weights } });
         data.checklist = saved.checklist;
-        toast("Чек-лист сохранён. Новые звонки оцениваются по нему");
+        toast(saved.message || "Чек-лист сохранён");
         paint(saved.checklist);
       } catch (ex) {
         err.textContent = ex.message;

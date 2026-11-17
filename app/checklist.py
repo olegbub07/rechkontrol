@@ -128,6 +128,42 @@ def _merge(stored: dict | None) -> dict:
     return base
 
 
+def _fmt(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
+def _number(value, label: str) -> float:
+    """Число из формы: пустое поле, буквы, NaN и логические значения - ошибка, а не 0."""
+    if isinstance(value, bool) or value is None:
+        raise ChecklistError(f"{label}: укажите число")
+    if isinstance(value, str):
+        text = value.strip().replace(",", ".")
+        if not text:
+            raise ChecklistError(f"{label}: поле пустое, укажите число")
+        value = text
+    try:
+        num = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ChecklistError(f"{label}: «{str(value)[:20]}» не число") from exc
+    if num != num or num in (float("inf"), float("-inf")):
+        raise ChecklistError(f"{label}: укажите обычное число")
+    return round(num, 2)
+
+
+def normalize_weights(weights: dict[str, float]) -> dict[str, float]:
+    """Веса метрик приводятся к сумме 1 (доли итоговой оценки), с точностью до 0,001."""
+    total = sum(weights.values())
+    if total <= 0:
+        raise ChecklistError("Хотя бы одна метрика должна иметь вес больше 0")
+    keys = list(weights)
+    out = {k: round(weights[k] / total, 3) for k in keys}
+    drift = round(1 - sum(out.values()), 3)
+    if drift:
+        top = max(keys, key=lambda k: out[k])
+        out[top] = round(out[top] + drift, 3)
+    return out
+
+
 def validate(payload: dict) -> dict:
     """Проверяет присланный из кабинета чек-лист и возвращает очищенную версию."""
     if not isinstance(payload, dict):
@@ -149,13 +185,14 @@ def validate(payload: dict) -> dict:
         title = str(item.get("title") or base["title"]).strip()
         if not LIMITS["title_min_len"] <= len(title) <= LIMITS["title_max_len"]:
             raise ChecklistError(f"«{base['title']}»: название от 3 до 80 символов")
-        try:
-            weight = round(float(item.get("weight", base["weight"])), 2)
-        except (TypeError, ValueError) as exc:
-            raise ChecklistError(f"«{title}»: вес должен быть числом") from exc
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ChecklistError(f"«{title}»: признак «включён» должен быть да или нет")
+        weight = _number(item["weight"] if "weight" in item else base["weight"], f"«{title}»: вес")
         if not LIMITS["weight_min"] <= weight <= LIMITS["weight_max"]:
-            raise ChecklistError(f"«{title}»: вес от 0 до 5")
-        enabled = bool(item.get("enabled", True))
+            raise ChecklistError(f"«{title}»: вес должен быть от 0 до 5, сейчас {_fmt(weight)}")
+        if enabled and weight <= 0:
+            raise ChecklistError(f"«{title}»: у включённого критерия вес должен быть больше 0. Чтобы не учитывать критерий, снимите галочку «Вкл.»")
         row = {"id": item["id"], "title": title, "category": base["category"], "weight": weight, "enabled": enabled,
                "phrases": base["phrases"]}
         if isinstance(base["phrases"], list):
@@ -186,20 +223,18 @@ def validate(payload: dict) -> dict:
         active = [r for r in clean if r["category"] == cat and r["enabled"] and r["weight"] > 0]
         if not active:
             raise ChecklistError(f"В группе «{label}» должен остаться хотя бы один включённый критерий с весом больше 0")
-    weights_in = payload.get("category_weights") or DEFAULT_CATEGORY_WEIGHTS
+    weights_in = payload.get("category_weights", DEFAULT_CATEGORY_WEIGHTS)
     if not isinstance(weights_in, dict):
         raise ChecklistError("Веса метрик передаются объектом")
     weights: dict[str, float] = {}
     for cat, label in CATEGORIES.items():
-        try:
-            w = round(float(weights_in.get(cat, DEFAULT_CATEGORY_WEIGHTS[cat])), 3)
-        except (TypeError, ValueError) as exc:
-            raise ChecklistError(f"Вес метрики «{label}» должен быть числом") from exc
-        if not 0 <= w <= 1:
-            raise ChecklistError(f"Вес метрики «{label}» от 0 до 1")
+        if cat not in weights_in:
+            raise ChecklistError(f"Не указан вес метрики «{label}»")
+        w = _number(weights_in[cat], f"Вес метрики «{label}»")
+        if not 0 < w <= 1:
+            raise ChecklistError(f"Вес метрики «{label}» должен быть больше 0 и не больше 1, сейчас {_fmt(w)}")
         weights[cat] = w
-    if sum(weights.values()) <= 0:
-        raise ChecklistError("Хотя бы одна метрика должна иметь вес больше 0")
+    weights = normalize_weights(weights)
     return {"criteria": clean, "category_weights": weights}
 
 
@@ -225,7 +260,7 @@ def diff_summary(old: dict, new: dict) -> str:
     for cat in CATEGORIES:
         if old["category_weights"].get(cat) != new["category_weights"].get(cat):
             parts.append(f"метрика {cat}: {old['category_weights'].get(cat)}→{new['category_weights'].get(cat)}")
-    return "; ".join(parts) or "без изменений"
+    return "; ".join(parts)
 
 
 def load_checklist(session: Session) -> dict:
