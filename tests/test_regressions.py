@@ -6,6 +6,7 @@ from app.api.export import csv_cell
 from app.audio import AudioError, parse_ffmpeg_duration, to_wav_mono_16k
 from app.dataset import clip_file
 from app.diarize import from_whisper
+from app.demo_calls import EDGE_FILENAMES
 from app.seed import seed_if_empty
 
 
@@ -57,6 +58,12 @@ def test_seed_writes_script_only_when_missing(monkeypatch):
     class _Query:
         def count(self):
             return 1
+
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def all(self):
+            return [(name,) for name in EDGE_FILENAMES]
 
     class _Session:
         def get(self, _model, key):
