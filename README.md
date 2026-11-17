@@ -31,6 +31,21 @@
 
 ## Быстрый старт
 
+### Одной командой (Windows)
+
+Двойной щелчок по `start.bat` или в PowerShell:
+
+```powershell
+.\start.bat            # Docker: приложение + PostgreSQL 17
+.\start.bat -Llm       # то же + Ollama для оценки LLM (модель скачается один раз)
+.\start.bat -NoDocker  # без Docker: .venv + SQLite
+.\start.bat -Stop      # остановить (данные остаются)
+```
+
+Скрипт `start.ps1` проверяет, что Docker установлен и запущен (если Docker Desktop не запущен, запускает его), при первом запуске создаёт `.env` из `.env.example` со случайным паролем PostgreSQL, выполняет `docker compose up -d --build`, ждёт `/api/health`, печатает стартовые логины и пароли и открывает браузер. Если Docker нет или он не отвечает, скрипт сам переходит на запуск без Docker: создаёт `.venv`, ставит зависимости и запускает `run.py` в отдельном окне. Другие ключи: `-Port 8081` (порт на 127.0.0.1, по умолчанию `APP_PORT` из `.env`), `-NoBrowser`. Если стартовые пароли уже сменены, скрипт так и скажет; в Docker их можно посмотреть командой `docker compose exec app cat data/initial_credentials.txt`.
+
+### Вручную
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
