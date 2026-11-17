@@ -14,7 +14,7 @@ import logging
 from urllib.parse import urlparse
 
 from app.config import settings
-from app.pii import mask_text
+from app.pii import mask_segments, mask_text
 from app.quality import CheckResult, QualityReport, _clip
 
 log = logging.getLogger("rechkontrol.llm")
@@ -50,9 +50,9 @@ def _url_allowed(url: str) -> bool:
 
 def build_prompt(turns: list[dict], report: QualityReport) -> str:
     lines = []
-    for turn in turns:
+    for turn in mask_segments([t for t in turns if isinstance(t, dict)]):
         who = "Оператор" if turn.get("role") == "operator" else "Клиент"
-        lines.append(f"{who}: {mask_text(str(turn.get('text') or ''))}")
+        lines.append(f"{who}: {turn.get('text') or ''}")
     dialog = "\n".join(lines)
     if len(dialog) > MAX_CHARS:
         dialog = dialog[: MAX_CHARS // 2] + "\n…\n" + dialog[-MAX_CHARS // 2 :]
@@ -82,8 +82,9 @@ def parse_answer(text: str) -> dict | None:
         except (KeyError, TypeError, ValueError):
             return None
     recs = data.get("recommendations") or []
-    out["recommendations"] = [str(r).strip()[:300] for r in recs if str(r).strip()][:4] if isinstance(recs, list) else []
-    out["summary"] = str(data.get("summary") or "").strip()[:600]
+    # Ответ модели тоже может повторить имя или цифры из диалога: маскируем до сохранения.
+    out["recommendations"] = [mask_text(str(r).strip()[:300]) for r in recs if str(r).strip()][:4] if isinstance(recs, list) else []
+    out["summary"] = mask_text(str(data.get("summary") or "").strip()[:600])
     return out
 
 

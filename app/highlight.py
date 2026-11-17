@@ -12,7 +12,7 @@ import re
 from functools import lru_cache
 
 from app.checklist import CATEGORIES, RUDE_PENALTY, by_id
-from app.pii import PLACEHOLDERS, mask_text
+from app.pii import PLACEHOLDERS, mask_segments
 from app.quality import DEFAULT_COMPANY, NEG_WORDS, TY_RE
 
 # Критерии, где найденная фраза в речи оператора - это плюс (подсвечиваем, если пункт пройден).
@@ -31,6 +31,7 @@ _PII_RE = re.compile("|".join(re.escape(v) for v in sorted(set(PLACEHOLDERS.valu
 _PII_TITLE = {
     "[EMAIL]": "e-mail", "[КАРТА]": "номер карты", "[СЧЁТ]": "номер счёта", "[СНИЛС]": "СНИЛС",
     "[ИНН]": "ИНН", "[ПАСПОРТ]": "паспорт", "[ТЕЛЕФОН]": "телефон", "[НОМЕР]": "номер", "[ФИО]": "ФИО",
+    "[ДАТА]": "дата",
 }
 
 
@@ -84,10 +85,9 @@ def _check_text(check: dict, impact: _Impact) -> tuple[str, str]:
     return check.get("title") or check["id"], f"{cat}: пункт не пройден, итог −{_points(impact.lost(check))} б."
 
 
-def _pii_spans(text: str, masked: bool) -> list[tuple[int, int, str]]:
+def _pii_spans(text: str, masked: bool, hidden: str) -> list[tuple[int, int, str]]:
     if masked:
         return [(m.start(), m.end(), _PII_TITLE.get(m.group(0), "данные")) for m in _PII_RE.finditer(text)]
-    hidden = mask_text(text)
     if hidden == text:
         return []
     spans = []
@@ -138,6 +138,7 @@ def segment_highlights(
     tutoyage_bad = bool(tutoyage and not tutoyage.get("passed"))
 
     op_idx = [i for i, s in enumerate(segments) if s.get("role") == "operator"]
+    hidden_all = [] if masked else [str(h.get("text") or "") for h in mask_segments(segments)]
     out: list[dict] = []
     for i, seg in enumerate(segments):
         text = str(seg.get("text") or "")
@@ -160,7 +161,7 @@ def segment_highlights(
             for m in _phrase_re(p).finditer(text):
                 raw.append((m.start(), m.end(), "neg", "tonality", "Негативная лексика",
                             "Снижает тональность звонка, на итоговую оценку не влияет"))
-        for s, e, what in _pii_spans(text, masked):
+        for s, e, what in _pii_spans(text, masked, "" if masked else hidden_all[i]):
             raw.append((s, e, "pii", "pii", f"Персональные данные: {what}",
                         "Скрыто маскированием" if masked else "Будет скрыто при маскировании"))
         # Пересечения: оставляем более важный фрагмент (нарушение > ПДн > негатив > плюс), затем более длинный.

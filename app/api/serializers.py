@@ -6,7 +6,7 @@ from app.config import settings
 from app.highlight import segment_highlights
 from app.models import Call
 from app.pii import mask_segments, mask_text
-from app.schemas import CallDetail, CallListItem, CheckOut, OperatorOut, QualityOut, SegmentOut
+from app.schemas import CallDetail, CallListItem, CheckOut, MarkerOut, OperatorOut, QualityOut, SegmentOut, SpanOut
 
 
 def operator_scores(calls: list) -> dict:
@@ -122,7 +122,7 @@ def _checks(raw: list, mask=lambda value: value) -> list[CheckOut]:
                     passed=bool(item.get("passed")),
                     score=float(item.get("score") or 0),
                     weight=float(item.get("weight") or 0),
-                    detail=str(item.get("detail") or ""),
+                    detail=mask(str(item.get("detail") or "")),
                     evidence=None if item.get("evidence") is None else mask(str(item.get("evidence"))),
                 )
             )
@@ -132,7 +132,7 @@ def _checks(raw: list, mask=lambda value: value) -> list[CheckOut]:
 
 
 def _mask_violation(item: dict, mask) -> dict:
-    return {key: mask(value) if isinstance(value, str) and key in {"evidence", "text", "quote"} else value for key, value in item.items()}
+    return {key: mask(value) if isinstance(value, str) and key in {"evidence", "text", "quote", "detail"} else value for key, value in item.items()}
 
 
 def call_detail(call: Call, unmasked: bool = False, script: dict | None = None) -> CallDetail:
@@ -178,7 +178,10 @@ def call_detail(call: Call, unmasked: bool = False, script: dict | None = None) 
             script.get("extra_script_phrases"),
             masked=masking,
         )
-        segments = [s.model_copy(update={"spans": m["spans"], "markers": m["markers"]}) for s, m in zip(segments, marks)]
+        segments = [
+            s.model_copy(update={"spans": [SpanOut(**x) for x in m["spans"]], "markers": [MarkerOut(**x) for x in m["markers"]]})
+            for s, m in zip(segments, marks)
+        ]
     return CallDetail(
         **base.model_dump(),
         language=call.language,

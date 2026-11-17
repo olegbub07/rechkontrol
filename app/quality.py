@@ -159,10 +159,6 @@ RUDENESS = (
     "вам на горячую линию",
     "ну наконец-то",
     "ну наконец то",
-    "алло алло",
-    "женщина,",
-    "мужчина,",
-    "девушка, вы",
 )
 TY_RE = re.compile(r"(^|[\s,])(ты|тебе|тобой|тебя)([\s,.\?!]|$)")
 QUESTION_RE = re.compile(
@@ -294,6 +290,22 @@ def _has(text: str, phrases: tuple[str, ...] | list[str]) -> str | None:
 
 def _count(text: str, phrases: tuple[str, ...] | list[str]) -> int:
     return sum(text.count(p) for p in phrases)
+
+
+def _self_named(turns: list[dict]) -> str | None:
+    """«Банк Центр-инвест, Дмитрий, чем могу помочь?» - оператор назвался без «меня зовут».
+
+    Считаем, если в первой реплике оператора, сказанной до клиента, есть русское имя.
+    """
+    from app.ru_names import find_first_names
+
+    for t in turns:
+        if t.get("role") == "client":
+            return None
+        if t.get("role") == "operator":
+            found = find_first_names(str(t.get("text") or ""), strict=True)
+            return found[0].group(0).lower() if found else None
+    return None
 
 
 def _clip(value: float) -> float:
@@ -547,7 +559,7 @@ def analyze(
         "Оператор поприветствовал клиента." if greet_hit else "В начале разговора нет приветствия.",
         _evidence(op_turns[:2], ph("greeting")) if greet_hit else None,
     )
-    intro_hit = _has(op_text, ph("intro"))
+    intro_hit = _has(op_text, ph("intro")) or _self_named(turns)
     add(
         "intro",
         "Представление оператора",
@@ -556,7 +568,7 @@ def analyze(
         100 if intro_hit else 20,
         1.0,
         "Оператор назвал себя." if intro_hit else "Оператор не представился.",
-        _evidence(turns, ph("intro")) if intro_hit else None,
+        (_evidence(turns, ph("intro")) or (op_turns[0]["text"] if op_turns else None)) if intro_hit else None,
     )
     company_hit = _has(op_text, company)
     add(
@@ -783,11 +795,10 @@ def analyze(
         recs.append("Существенных нарушений нет. Держите тот же ритм: приветствие, уточнение, решение, закрытие.")
 
     topic = _topic(all_text)
-    op_name_m = re.search(r"меня зовут ([а-яё]+)", op_text)
-    who = op_name_m.group(1).title() if op_name_m else "Оператор"
-    outcome = "вопрос закрыт" if res_hit and not hanging else "вопрос требует доработки"
+    # Имя оператора в резюме не пишем: резюме уходит в отчёты и экспорт, а имя - ПДн.
+    outcome = "вопрос закрыт" if resolution >= 70 and not hanging else "вопрос требует доработки"
     summary = (
-        f"{who} {'провела' if who.endswith(('а', 'я')) else 'провёл'} консультацию по теме «{topic}». "
+        f"Оператор провёл консультацию по теме «{topic}». "
         f"Вежливость {politeness:.0f}, скрипт {script:.0f}, решение {resolution:.0f}. "
         f"Итог: {outcome}. Тональность — {_tonality_ru(tonality)}."
     )

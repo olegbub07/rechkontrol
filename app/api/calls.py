@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from io import BytesIO
@@ -22,6 +23,7 @@ from app.crypto import EncryptedWriter, decrypt_bytes
 from app.db import after_commit, write_lock
 from app.diarize import assign_roles, label_speakers, merge_whisper_segments
 from app.models import Call, Operator, Transcript, User
+from app.pii import mask_segments, mask_text
 from app.quality import analyze, script_sheet
 from app.security import (
     CALL_STATUSES,
@@ -68,6 +70,24 @@ def _get_or_create_operator(session: Session, operator_id: int | None, operator_
     return op
 
 
+def _masked_text_matches(session: Session, needle: str, candidate_ids: list[int]) -> list[int]:
+    """Из звонков, где запрос нашёлся в исходном тексте, оставляет те, где он виден и после маскирования."""
+    if not candidate_ids:
+        return []
+    want = needle.lower().replace("ё", "е")
+    found: list[int] = []
+    for tr in session.query(Transcript).filter(Transcript.call_id.in_(candidate_ids)).all():
+        try:
+            segs = json.loads(tr.segments_json or "[]")
+        except (TypeError, ValueError):
+            segs = []
+        segs = [x for x in segs if isinstance(x, dict)]
+        shown = " ".join(str(x.get("text") or "") for x in mask_segments(segs)) if segs else mask_text(tr.full_text or "")
+        if want in shown.lower().replace("ё", "е"):
+            found.append(tr.call_id)
+    return found
+
+
 @router.get("/calls", response_model=dict)
 def list_calls(
     status: str | None = None,
@@ -94,6 +114,10 @@ def list_calls(
     if q and q.strip():
         like = f"%{escape_like(q.strip())}%"
         text_ids = session.query(Transcript.call_id).filter(Transcript.full_text.ilike(like, escape="\\"))
+        if settings.pii_masking:
+            # Поиск идёт по тому тексту, который видит пользователь (с маской ПДн). Иначе по
+            # скрытым цифрам и датам можно было бы подбирать данные клиента через поиск.
+            text_ids = _masked_text_matches(session, q.strip(), [cid for (cid,) in text_ids.all()])
         query = query.filter(or_(Call.orig_filename.ilike(like, escape="\\"), Call.id.in_(text_ids)))
     total = query.count()
     offset = min((page - 1) * page_size, 100_000)
