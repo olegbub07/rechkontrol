@@ -5,7 +5,7 @@
 ## Контур
 
 - По умолчанию слушает только `127.0.0.1`. Другой адрес требует `ALLOW_REMOTE=true` и TLS-прокси перед приложением.
-- При наличии модели в `data/models/faster-whisper-base/` Whisper запускается с `local_files_only=True` и `HF_HUB_OFFLINE=1`. Аудио в интернет не уходит.
+- При наличии модели в `data/models/faster-whisper-<WHISPER_MODEL>/` Whisper запускается с `local_files_only=True` и `HF_HUB_OFFLINE=1`. Аудио в интернет не уходит.
 - Нет облачных LLM: оценка — локальный чек-лист.
 - Интерфейс без внешних шрифтов и CDN.
 

@@ -54,7 +54,7 @@ WinError 10048 — это занятый порт, не ошибка кода.
 
 ## Модель Whisper
 
-Ищется в `data/models/faster-whisper-base/model.bin`. Если файла нет, `faster-whisper` попытается скачать модель (нужна сеть один раз). После этого контур офлайн.
+Ищется в `data/models/faster-whisper-<WHISPER_MODEL>/model.bin` (например `faster-whisper-small`). Если файла нет, модель один раз скачивается с Hugging Face в эту папку (нужна сеть). После этого контур офлайн. Скорость и точность на своей машине: `python scripts/benchmark.py` (см. [PERFORMANCE.md](PERFORMANCE.md)).
 
 ## Датасет
 

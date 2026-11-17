@@ -373,3 +373,17 @@ def test_analyst_cannot_delete_script_or_full_export():
             if row is not None:
                 session.delete(row)
                 session.commit()
+
+
+def test_whisper_model_setting_is_honored(monkeypatch, tmp_path):
+    from app import transcribe
+
+    monkeypatch.setattr("app.transcribe.settings.whisper_model", "small")
+    assert transcribe.local_model_dir().name == "faster-whisper-small"
+    monkeypatch.setattr("app.transcribe.settings.whisper_model", "base")
+    assert transcribe.local_model_dir().name == "faster-whisper-base"
+    custom = tmp_path / "my-model"
+    custom.mkdir()
+    monkeypatch.setattr("app.transcribe.settings.whisper_model", str(custom))
+    assert transcribe.local_model_dir() == custom
+    assert not transcribe.local_model_ready()

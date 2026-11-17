@@ -24,12 +24,45 @@ BANK_PROMPT = (
 )
 
 
-def local_model_dir() -> Path:
-    return settings.models_dir / "faster-whisper-base"
+KNOWN_MODELS = ("tiny", "base", "small", "medium", "large-v2", "large-v3")
 
 
-def local_model_ready() -> bool:
-    return (local_model_dir() / "model.bin").exists()
+def model_name() -> str:
+    return (settings.whisper_model or "base").strip()
+
+
+def local_model_dir(name: str | None = None) -> Path:
+    """Каталог модели. WHISPER_MODEL может быть именем (base, small, ...) или путём к папке модели."""
+    value = (name or model_name()).strip()
+    candidate = Path(value).expanduser()
+    if value not in KNOWN_MODELS and candidate.is_dir():
+        return candidate
+    safe = value.replace("/", "_").replace("\\", "_")
+    return settings.models_dir / f"faster-whisper-{safe}"
+
+
+def local_model_ready(name: str | None = None) -> bool:
+    return (local_model_dir(name) / "model.bin").exists()
+
+
+def download_model(name: str | None = None) -> Path:
+    """Скачивает модель один раз в data/models/faster-whisper-<name>/, дальше работа офлайн."""
+    from huggingface_hub import snapshot_download
+
+    value = name or model_name()
+    target = local_model_dir(value)
+    repo = f"Systran/faster-whisper-{value}"
+    target.mkdir(parents=True, exist_ok=True)
+    snapshot_download(repo_id=repo, local_dir=str(target))
+    return target
+
+
+def reset_model() -> None:
+    """Выгрузить модель (нужно бенчмарку, чтобы сменить WHISPER_MODEL в одном процессе)."""
+    global _model, _batch_pipe
+    with _model_lock:
+        _model = None
+        _batch_pipe = None
 
 
 def cpu_threads() -> int:
@@ -64,25 +97,17 @@ def load_model():
 
             settings.models_dir.mkdir(parents=True, exist_ok=True)
             threads = cpu_threads()
-            if local_model_ready():
-                os.environ["HF_HUB_OFFLINE"] = "1"
-                _model = WhisperModel(
-                    str(local_model_dir()),
-                    device=settings.whisper_device,
-                    compute_type=settings.whisper_compute_type,
-                    cpu_threads=threads,
-                    num_workers=1,
-                    local_files_only=True,
-                )
-            else:
-                _model = WhisperModel(
-                    settings.whisper_model,
-                    device=settings.whisper_device,
-                    compute_type=settings.whisper_compute_type,
-                    cpu_threads=threads,
-                    num_workers=1,
-                    download_root=str(settings.models_dir),
-                )
+            if not local_model_ready():
+                download_model()
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            _model = WhisperModel(
+                str(local_model_dir()),
+                device=settings.whisper_device,
+                compute_type=settings.whisper_compute_type,
+                cpu_threads=threads,
+                num_workers=1,
+                local_files_only=True,
+            )
             _batch_pipe = BatchedInferencePipeline(model=_model)
         return _model
 

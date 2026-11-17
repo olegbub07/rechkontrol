@@ -56,7 +56,7 @@ data/
   jwt.secret          секрет JWT (отдельный файл)
   audio/              зашифрованные записи
   tmp/                временные WAV во время обработки
-  models/faster-whisper-base/   локальная модель STT
+  models/faster-whisper-<WHISPER_MODEL>/   локальная модель STT
   datasets/minds14_ru/          клипы и манифест датасета
 ```
 
