@@ -9,6 +9,7 @@ const CHECKLIST_HINTS = {
   answers: "доля вопросов клиента, на которые оператор ответил",
   substance: "средняя длина реплики оператора",
   response_time: "средняя пауза перед ответом оператора",
+  recording_notice: "152-ФЗ: ищется во всём разговоре, включая автоинформатор; по умолчанию выключен",
 };
 
 const FEATURE_AUDIT_RU = {
@@ -16,6 +17,8 @@ const FEATURE_AUDIT_RU = {
   "checklist.reset": "чек-лист сброшен",
   "checklist.rescore": "пересчёт оценок",
   "call.unmask": "просмотр без маскирования",
+  "call.audio": "доступ к аудиозаписи",
+  "retention.purge": "удаление по сроку хранения",
   "report.operator": "PDF-отчёт по оператору",
   "operator.create": "добавлен оператор",
   "export.xlsx": "экспорт Excel",

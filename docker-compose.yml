@@ -48,6 +48,12 @@ services:
       LLM_TIMEOUT_SEC: ${LLM_TIMEOUT_SEC:-120}
       PII_MASKING: ${PII_MASKING:-true}
       DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Moscow}
+      # 152-ФЗ: срок хранения звонков в днях (0 - не удалять), шифрование расшифровок в базе.
+      RETENTION_DAYS: ${RETENTION_DAYS:-365}
+      ENCRYPT_TRANSCRIPTS: ${ENCRYPT_TRANSCRIPTS:-true}
+      # Ключ шифрования в отдельном томе, не рядом с данными. Со старой версии ключ
+      # из data/master.key переносится сюда сам при первом запуске.
+      MASTER_KEY_FILE: /app/keys/master.key
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
       # ollama - сервис этой же compose-сети на этой машине, наружу текст не уходит.
@@ -55,10 +61,12 @@ services:
       OLLAMA_URL: http://ollama:11434
       LLM_ALLOW_REMOTE: "true"
     volumes:
-      # ключ шифрования аудио, JWT-секрет, аудио, модели Whisper и стартовые пароли.
+      # JWT-секрет, зашифрованное аудио, модели Whisper и стартовые пароли.
       # Именованный том, а не ./data: каталог ./data Docker создал бы от root,
       # и приложение (uid 1000) не смогло бы в него писать.
       - appdata:/app/data
+      # Ключ шифрования отдельно от данных: бэкап appdata без appkeys не расшифровать.
+      - appkeys:/app/keys
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
 
@@ -74,6 +82,8 @@ volumes:
   pgdata:
     driver: local
   appdata:
+    driver: local
+  appkeys:
     driver: local
   ollama:
     driver: local

@@ -14,6 +14,11 @@ os.environ["DATA_DIR"] = str(_TEST_DATA)
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "")
 os.environ.setdefault("DEMO_VOICE_ENABLED", "false")
 os.environ.setdefault("LLM_PROVIDER", "none")
+# Автоудаление по сроку в фоне тестам не нужно: его проверяет tests/test_152fz.py напрямую.
+os.environ["RETENTION_DAYS"] = "0"
+# Ключ только свой, в каталоге тестов.
+os.environ.pop("MASTER_KEY", None)
+os.environ.pop("MASTER_KEY_FILE", None)
 
 import pytest  # noqa: E402
 

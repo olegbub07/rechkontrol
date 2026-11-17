@@ -70,22 +70,38 @@ def _get_or_create_operator(session: Session, operator_id: int | None, operator_
     return op
 
 
-def _masked_text_matches(session: Session, needle: str, candidate_ids: list[int]) -> list[int]:
-    """Из звонков, где запрос нашёлся в исходном тексте, оставляет те, где он виден и после маскирования."""
+def _text_matches(session: Session, needle: str, candidate_ids: list[int]) -> list[int]:
+    """Звонки, в тексте которых есть запрос.
+
+    При маскировании ищем по тому тексту, который видит пользователь (с маской ПДн). Иначе по
+    скрытым цифрам и датам можно было бы подбирать данные клиента через поиск.
+    """
     if not candidate_ids:
         return []
     want = needle.lower().replace("ё", "е")
     found: list[int] = []
-    for tr in session.query(Transcript).filter(Transcript.call_id.in_(candidate_ids)).all():
-        try:
-            segs = json.loads(tr.segments_json or "[]")
-        except (TypeError, ValueError):
-            segs = []
-        segs = [x for x in segs if isinstance(x, dict)]
-        shown = " ".join(str(x.get("text") or "") for x in mask_segments(segs)) if segs else mask_text(tr.full_text or "")
-        if want in shown.lower().replace("ё", "е"):
-            found.append(tr.call_id)
+    for start in range(0, len(candidate_ids), 500):
+        chunk = candidate_ids[start : start + 500]
+        for tr in session.query(Transcript).filter(Transcript.call_id.in_(chunk)).all():
+            if not settings.pii_masking:
+                if want in (tr.full_text or "").lower().replace("ё", "е"):
+                    found.append(tr.call_id)
+                continue
+            if _masked_shown(tr, want):
+                found.append(tr.call_id)
     return found
+
+
+def _masked_shown(tr: Transcript, want: str) -> bool:
+    if want not in (tr.full_text or "").lower().replace("ё", "е"):
+        return False
+    try:
+        segs = json.loads(tr.segments_json or "[]")
+    except (TypeError, ValueError):
+        segs = []
+    segs = [x for x in segs if isinstance(x, dict)]
+    shown = " ".join(str(x.get("text") or "") for x in mask_segments(segs)) if segs else mask_text(tr.full_text or "")
+    return want in shown.lower().replace("ё", "е")
 
 
 @router.get("/calls", response_model=dict)
@@ -99,10 +115,7 @@ def list_calls(
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ) -> dict:
-    query = limit_calls(
-        session.query(Call).options(joinedload(Call.operator), joinedload(Call.quality)),
-        user,
-    )
+    query = limit_calls(session.query(Call), user)
     if status:
         if status not in CALL_STATUSES:
             raise HTTPException(400, "Неизвестный статус")
@@ -113,12 +126,11 @@ def list_calls(
         query = query.filter(Call.flagged == (1 if flagged else 0))
     if q and q.strip():
         like = f"%{escape_like(q.strip())}%"
-        text_ids = session.query(Transcript.call_id).filter(Transcript.full_text.ilike(like, escape="\\"))
-        if settings.pii_masking:
-            # Поиск идёт по тому тексту, который видит пользователь (с маской ПДн). Иначе по
-            # скрытым цифрам и датам можно было бы подбирать данные клиента через поиск.
-            text_ids = _masked_text_matches(session, q.strip(), [cid for (cid,) in text_ids.all()])
+        # Расшифровки в базе зашифрованы, поэтому ищем в Python среди звонков, доступных пользователю.
+        scoped = [cid for (cid,) in query.with_entities(Call.id).all()]
+        text_ids = _text_matches(session, q.strip(), scoped)
         query = query.filter(or_(Call.orig_filename.ilike(like, escape="\\"), Call.id.in_(text_ids)))
+    query = query.options(joinedload(Call.operator), joinedload(Call.quality))
     total = query.count()
     offset = min((page - 1) * page_size, 100_000)
     rows = query.order_by(Call.call_at.desc(), Call.id.desc()).offset(offset).limit(page_size).all()
@@ -268,7 +280,9 @@ async def upload_calls(
 
 
 @router.get("/calls/{call_id}/audio")
-def get_audio(call_id: int, session: Session = Depends(db_session), user: User = Depends(current_user)):
+def get_audio(
+    call_id: int, request: Request, session: Session = Depends(db_session), user: User = Depends(current_user)
+):
     call = require_call(session.get(Call, call_id), user)
     if not call.stored_name:
         raise HTTPException(404, "Аудио недоступно")
@@ -279,6 +293,8 @@ def get_audio(call_id: int, session: Session = Depends(db_session), user: User =
     if not path.exists():
         raise HTTPException(404, "Файл не найден на диске")
     payload = decrypt_bytes(path.read_bytes())
+    # Прослушивание и скачивание записи - доступ к ПДн, фиксируем в журнале (152-ФЗ, ст. 19).
+    write_audit(session, "call.audio", user=user, detail=f"звонок №{call.id}", request=request)
     headers = {
         "Content-Disposition": content_disposition(call.orig_filename),
         "X-Content-Type-Options": "nosniff",

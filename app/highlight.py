@@ -17,7 +17,7 @@ from app.quality import _PROFANITY_RE, DEFAULT_COMPANY, NEG_WORDS, TY_RE
 
 # Критерии, где найденная фраза в речи оператора - это плюс (подсвечиваем, если пункт пройден).
 POSITIVE_PHRASE = (
-    "greeting", "intro", "company", "help_offer", "clarify", "closing", "extra_script",
+    "greeting", "intro", "company", "help_offer", "clarify", "closing", "extra_script", "recording_notice",
     "courtesy", "empathy", "resolution_lang", "next_steps", "confirm",
 )
 # Найденная фраза - нарушение.

@@ -20,7 +20,7 @@ ENV APP_HOST=0.0.0.0 \
     APP_PORT=8080 \
     ALLOW_REMOTE=true
 
-RUN useradd --create-home --uid 1000 rk && mkdir -p /app/data && chown rk:rk /app/data
+RUN useradd --create-home --uid 1000 rk && mkdir -p /app/data /app/keys && chown rk:rk /app/data /app/keys && chmod 700 /app/keys
 USER rk
 EXPOSE 8080
 CMD ["python", "run.py"]

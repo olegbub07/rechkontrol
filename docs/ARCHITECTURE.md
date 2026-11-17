@@ -52,6 +52,7 @@ FastAPI  127.0.0.1:8080
 | `app/demo_voice.py` | необязательная озвучка демо, проверка SHA-256 |
 | `app/dataset.py` | MInDS-14, WER, импорт |
 | `app/seed.py` | демо-диалоги |
+| `app/retention.py` | срок хранения: автоудаление звонков (152-ФЗ) |
 | `app/static/` | интерфейс кабинета |
 
 ## Данные на диске (`data/`, gitignored)
@@ -59,7 +60,7 @@ FastAPI  127.0.0.1:8080
 ```
 data/
   app.db              SQLite, если не задан DATABASE_URL
-  master.key          ключ шифрования аудио
+  master.key.moved    метка: ключ перенесён из data/ (сам ключ теперь в MASTER_KEY_FILE, см. 152FZ.md)
   jwt.secret          секрет JWT (отдельный файл)
   initial_credentials.txt   стартовые пароли до первой смены, права только владельца
   audio/              зашифрованные записи

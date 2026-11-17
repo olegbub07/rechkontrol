@@ -10,6 +10,7 @@ from app.api.deps import db_session, require_admin
 from app.audit import write_audit
 from app.auth import clear_all_login_locks, clear_password_failures, create_token, hash_password, needs_password_change
 from app.config import settings
+from app.crypto import key_location
 from app.db import db_guard_status
 from app.models import AuditLog, Call, Operator, SecurityMark, User
 from app.passwords import PasswordError, validate_password, validate_role, validate_username
@@ -94,6 +95,12 @@ def posture(session: Session = Depends(db_session), _: User = Depends(require_ad
         "login_lock_persisted": True,
         "logout_revokes_until_expiry": True,
         "db": guard,
+        "pd": {
+            "key_location": key_location(),
+            "key_outside_data": key_location() != "data",
+            "transcripts_encrypted": bool(settings.encrypt_transcripts),
+            "retention_days": int(settings.retention_days),
+        },
     }
 
 

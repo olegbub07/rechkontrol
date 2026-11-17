@@ -89,6 +89,13 @@ function Initialize-EnvFile([bool]$ForDocker) {
         $changed = $true
         Say "  LLM_PROVIDER=ollama записан в .env"
     }
+    if (-not $ForDocker -and -not (Get-EnvValue $lines "MASTER_KEY_FILE") -and -not (Get-EnvValue $lines "MASTER_KEY")) {
+        # 152-ФЗ: ключ шифрования не держим в data\ рядом с данными. Старый data\master.key программа перенесёт сама.
+        $keyDir = if ($OnWindows) { Join-Path $env:LOCALAPPDATA "RechKontrol" } else { Join-Path $HOME ".config/rechkontrol" }
+        $lines = Set-EnvValue $lines "MASTER_KEY_FILE" (Join-Path $keyDir "master.key")
+        $changed = $true
+        Say "  ключ шифрования будет храниться вне data: $(Join-Path $keyDir 'master.key') (MASTER_KEY_FILE в .env)" "Yellow"
+    }
     if ((Get-EnvValue $lines "WHISPER_MODEL") -eq "base" -and -not ($lines -match "WHISPER_MODEL_MIGRATED")) {
         # base был старым значением по умолчанию; small заметно грамотнее. Один раз переводим.
         $lines = Set-EnvValue $lines "WHISPER_MODEL" "small"

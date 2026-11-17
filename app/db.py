@@ -249,3 +249,48 @@ def get_session() -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+# Поля с ПДн, которые шифруются в базе (см. app.models.EncryptedText).
+ENCRYPTED_COLUMNS = (
+    ("transcripts", ("full_text", "segments_json")),
+    ("quality", ("checks_json",)),
+)
+
+
+def encrypt_plain_texts(batch: int = 200) -> int:
+    """Шифрует открытые строки, оставшиеся от версий без шифрования расшифровок. Возвращает число строк.
+
+    Безопасно запускать при каждом старте: уже зашифрованные строки (с префиксом) не трогаются.
+    """
+    if not settings.encrypt_transcripts:
+        return 0
+    from app.crypto import TEXT_PREFIX, encrypt_text
+
+    done = 0
+    like = TEXT_PREFIX + "%"
+    for table, columns in ENCRYPTED_COLUMNS:
+        cond = " OR ".join(f'("{c}" IS NOT NULL AND "{c}" NOT LIKE :p)' for c in columns)
+        cols = ", ".join(f'"{c}"' for c in columns)
+        while True:
+            with write_lock, engine.begin() as conn:
+                rows = conn.execute(
+                    text(f'SELECT id, {cols} FROM "{table}" WHERE {cond} ORDER BY id LIMIT :n'), {"p": like, "n": batch}
+                ).fetchall()
+                for row in rows:
+                    values = {}
+                    for i, col in enumerate(columns, start=1):
+                        val = row[i]
+                        values[col] = val if val is None or str(val).startswith(TEXT_PREFIX) else encrypt_text(str(val))
+                    sets = ", ".join(f'"{c}" = :{c}' for c in columns)
+                    conn.execute(text(f'UPDATE "{table}" SET {sets} WHERE id = :id'), {**values, "id": row[0]})
+            done += len(rows)
+            if len(rows) < batch:
+                break
+    if done:
+        log.info("Зашифровано старых записей с текстом звонков: %s", done)
+        if IS_SQLITE:
+            # secure_delete=ON затирает старые страницы, а checkpoint убирает открытые копии из WAL.
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+    return done

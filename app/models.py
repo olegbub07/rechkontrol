@@ -4,9 +4,34 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from app.timeutil import utcnow
 from app.db import Base
+
+
+class EncryptedText(TypeDecorator):
+    """Текст с ПДн в базе хранится зашифрованным (Fernet, ключ как у аудио).
+
+    Старые открытые строки читаются как есть и шифруются при старте (app.db.encrypt_plain_texts).
+    В SQL по таким полям не ищем: поиск по тексту идёт в Python после расшифровки.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        from app.config import settings
+        from app.crypto import TEXT_PREFIX, encrypt_text
+
+        if value is None or not settings.encrypt_transcripts or str(value).startswith(TEXT_PREFIX):
+            return value
+        return encrypt_text(str(value))
+
+    def process_result_value(self, value, dialect):
+        from app.crypto import decrypt_text
+
+        return decrypt_text(value) if value is not None else None
 
 
 class User(Base):
@@ -67,8 +92,8 @@ class Transcript(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     call_id: Mapped[int] = mapped_column(ForeignKey("calls.id"), unique=True)
-    full_text: Mapped[str] = mapped_column(Text, default="")
-    segments_json: Mapped[str] = mapped_column(Text, default="[]")
+    full_text: Mapped[str] = mapped_column(EncryptedText, default="")
+    segments_json: Mapped[str] = mapped_column(EncryptedText, default="[]")
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     call: Mapped[Call] = relationship(back_populates="transcript")
@@ -91,7 +116,8 @@ class Quality(Base):
     violation_pct: Mapped[float] = mapped_column(Float, default=0)
     violations_json: Mapped[str] = mapped_column(Text, default="[]")
     recommendations_json: Mapped[str] = mapped_column(Text, default="[]")
-    checks_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Цитаты-доказательства из речи могут содержать имена и номера, поэтому тоже шифруются.
+    checks_json: Mapped[str] = mapped_column(EncryptedText, default="[]")
     summary: Mapped[str] = mapped_column(Text, default="")
 
     call: Mapped[Call] = relationship(back_populates="quality")

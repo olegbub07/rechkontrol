@@ -55,7 +55,7 @@ WinError 10048 — это занятый порт, не ошибка кода.
 
 `APP_HOST`, отличный от `127.0.0.1` / `localhost`, без `ALLOW_REMOTE=true` не запускается. Для сети перед приложением нужен TLS-прокси. Подробности — в [SECURITY.md](SECURITY.md) и [PERFORMANCE.md](PERFORMANCE.md).
 
-Ключи `data/master.key` и `data/jwt.secret` создаются при первом старте.
+`data/jwt.secret` и ключ шифрования создаются при первом старте. Ключ шифрования лежит вне `data/`: путь задаёт `MASTER_KEY_FILE` (`start.ps1` ставит `%LOCALAPPDATA%\RechKontrol\master.key`, в Docker - том `appkeys`). Старый `data/master.key` переносится сам, см. `152FZ.md`.
 
 ## Модель Whisper
 

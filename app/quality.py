@@ -262,6 +262,7 @@ ADVICE = {
     "confirm": "В конце спросите, решён ли вопрос, и дождитесь подтверждения клиента.",
     "no_hanging": "Не обрывайте разговор и не переадресовывайте без маршрута решения.",
     "response_time": "Сократите паузу перед ответом. Целевой ориентир — до 3 секунд после реплики клиента.",
+    "recording_notice": "В начале звонка предупредите клиента: «Разговор записывается для контроля качества».",
     "interrupt": "Дослушайте клиента до конца. Пауза 0,4–0,8 сек перед ответом снижает число перебиваний.",
 }
 
@@ -691,6 +692,18 @@ def analyze(
             "Есть обязательные фразы из вашего скрипта." if extra_hit else "Не найдены дополнительные фразы скрипта.",
             _evidence(turns, extra) if extra_hit else None,
         )
+
+    notice_hit = _has(all_text, ph("recording_notice")) if on("recording_notice") else None
+    add(
+        "recording_notice",
+        "Уведомление о записи разговора",
+        "script",
+        bool(notice_hit),
+        100 if notice_hit else 0,
+        0.8,
+        "Клиента предупредили о записи разговора." if notice_hit else "Нет предупреждения, что разговор записывается.",
+        _evidence(turns, ph("recording_notice"), role=None) if notice_hit else None,
+    )
 
     courtesy_score = _clip(20 + courtesy_n * 18)
     add(

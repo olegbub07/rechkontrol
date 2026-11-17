@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0
+    # 152-ФЗ. Мастер-ключ шифрования аудио и расшифровок. Порядок поиска:
+    # MASTER_KEY (сам ключ, например из секрета Docker) > MASTER_KEY_FILE (путь к файлу) > data/master.key (старые установки).
+    # Ключ лучше держать вне data/: тогда копия data/ или бэкап базы без ключа не читается.
+    master_key: str = ""
+    master_key_file: str = ""
+    # Шифровать текст расшифровок и цитаты в оценке в базе (Fernet, тот же ключ, что у аудио).
+    encrypt_transcripts: bool = True
+    # Срок хранения звонка (аудио, расшифровка, оценка) в днях от загрузки. 0 - не удалять автоматически.
+    retention_days: int = 365
+    # Как часто проверять просроченные звонки, в часах.
+    retention_check_hours: float = 6.0
     # Часовой пояс для показа времени в журнале аудита (в базе время хранится в UTC).
     display_tz: str = "Europe/Moscow"
     allowed_audio_ext: tuple[str, ...] = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a")
@@ -75,7 +86,19 @@ class Settings(BaseSettings):
 
     @property
     def key_path(self) -> Path:
+        if self.master_key_file.strip():
+            return Path(self.master_key_file.strip()).expanduser()
+        return self.legacy_key_path
+
+    @property
+    def legacy_key_path(self) -> Path:
+        """Старое место ключа: рядом с данными. Читается для совместимости и переносится."""
         return self.data_dir / "master.key"
+
+    @property
+    def key_moved_marker(self) -> Path:
+        """Метка «ключ перенесён». Без неё при потере MASTER_KEY_FILE создался бы новый ключ и старые данные не читались бы."""
+        return self.data_dir / "master.key.moved"
 
     @property
     def jwt_secret_path(self) -> Path:
