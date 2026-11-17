@@ -382,10 +382,43 @@ VOICE_MIN_BIC = 8.0  # насколько два голоса объясняют
 _SENT_END = re.compile(r"[.?!…]$")
 
 
-def _phrase_units(words: list[dict], gap: float = 0.25) -> list[list[dict]]:
+def _silences(audio: np.ndarray, sr: int, min_len: float = 0.25) -> list[float]:
+    """Середины пауз от min_len секунд (по энергии, кадр 20 мс)."""
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    frame = max(1, int(sr * 0.02))
+    n = (len(audio) // frame) * frame
+    if n == 0:
+        return []
+    rms = np.sqrt((audio[:n].reshape(-1, frame) ** 2).mean(axis=1) + 1e-12)
+    quiet = rms < max(1e-4, float(np.percentile(rms, 90)) * 0.06)
+    out: list[float] = []
+    i = 0
+    while i < len(quiet):
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(quiet) and quiet[j]:
+            j += 1
+        if (j - i) * 0.02 >= min_len:
+            out.append((i + j) / 2 * 0.02)
+        i = j
+    return out
+
+
+def _phrase_units(words: list[dict], gap: float = 0.25, pauses: list[float] | None = None) -> list[list[dict]]:
+    """Фразы: конец предложения, зазор между словами или пауза в звуке между серединами слов.
+
+    Whisper иногда растягивает слова на паузу и теряет пунктуацию на длинном куске,
+    поэтому зазора в таймстемпах мало, нужна ещё и тишина в самом аудио."""
+    pauses = sorted(pauses or [])
     units: list[list[dict]] = [[words[0]]]
     for prev, word in zip(words, words[1:]):
-        if word["start"] - prev["end"] >= gap or _SENT_END.search(prev["text"]):
+        lo = (prev["start"] + prev["end"]) / 2
+        hi = (word["start"] + word["end"]) / 2
+        silent = any(lo < p < hi for p in pauses)
+        if silent or word["start"] - prev["end"] >= gap or _SENT_END.search(prev["text"]):
             units.append([word])
         else:
             units[-1].append(word)
@@ -467,7 +500,7 @@ def voice_turns(words: list[dict], audio: np.ndarray, sr: int, operator_first: b
     """Роли по голосу. None, если голоса не делятся уверенно (тогда старая разметка)."""
     if not words or audio is None or not sr:
         return None
-    units = _phrase_units(words)
+    units = _phrase_units(words, pauses=_silences(audio, sr))
     feats = [voice_features(audio, sr, u[0]["start"], u[-1]["end"]) for u in units]
     idx = [i for i, f in enumerate(feats) if f is not None]
     if len(idx) < VOICE_MIN_UNITS:

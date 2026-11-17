@@ -41,3 +41,38 @@ def test_bank_terms_fixed(raw, fixed):
 )
 def test_normal_words_untouched(text):
     assert correct_asr_text(text) == text
+
+
+@pytest.mark.parametrize(
+    "raw, fixed",
+    [
+        ("в мобильном банке CentrInvest Online", "в мобильном банке Центр-инвест Онлайн"),
+        ("в приложении центр инвест онлайн", "в приложении Центр-инвест Онлайн"),
+        ("через бизнес онлайн", "через Бизнес Онлайн"),
+        ("карта мир суприм", "карта Mir Supreme"),
+        ("карта Мир Сюприм плюс", "карта Mir Supreme+"),
+        ("карта юнион пэй", "карта UnionPay"),
+        ("открыть вклад универсальный", "открыть вклад «Универсальный»"),
+        ("вклад «сезонный» на три месяца", "вклад «Сезонный» на три месяца"),
+        ("подключить экваринг", "подключить эквайринг"),
+        ("копия снилса", "копия СНИЛСа"),
+        ("на маркетплейсе фин услуги", "на маркетплейсе Финуслуги"),
+    ],
+)
+def test_bank_products_fixed(raw, fixed):
+    assert correct_asr_text(raw) == fixed
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "мир во всём мире",
+        "универсальный ключ от дома",
+        "сезонная скидка",
+        "открыть онлайн-курс",
+        "бизнес растёт",
+        "мне снился сон",
+    ],
+)
+def test_product_rules_leave_normal_text(text):
+    assert correct_asr_text(text) == text

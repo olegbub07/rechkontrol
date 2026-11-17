@@ -185,3 +185,26 @@ def test_voice_split_skips_single_voice():
 
     raw, audio, sr = _dialog([(180.0, 1.5)])
     assert voice_turns(raw[0]["words"], audio, sr) is None
+
+
+def test_phrase_units_split_on_audio_pause_without_punctuation():
+    from app.diarize import _phrase_units
+
+    words = [
+        {"start": 0.0, "end": 0.5, "text": "подскажите"},
+        {"start": 0.5, "end": 1.4, "text": "жилье"},  # Whisper растянул слово на паузу
+        {"start": 1.4, "end": 1.9, "text": "скорее"},
+        {"start": 1.9, "end": 2.4, "text": "вторичку"},
+    ]
+    assert len(_phrase_units(words)) == 1
+    units = _phrase_units(words, pauses=[1.2])
+    assert [len(u) for u in units] == [2, 2]
+
+
+def test_tutoyage_catches_verbs_not_only_pronouns():
+    from app.quality import TY_RE
+
+    for text in ("в офис приходи с паспортом", "заявление напишешь сам", "на сайте посмотри", "давай"):
+        assert TY_RE.search(" " + text + " "), text
+    for text in ("приходите с паспортом", "давайте проверим", "лишь бы успеть", "посмотрите на сайте"):
+        assert not TY_RE.search(" " + text + " "), text
