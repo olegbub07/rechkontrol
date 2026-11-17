@@ -420,7 +420,7 @@ def analyze_text(body: AnalyzeTextIn, session: Session = Depends(db_session), us
         turns = assign_roles(label_speakers(merge_whisper_segments(chunks, gap=10)), operator_first=body.operator_first)
     else:
         raise HTTPException(400, "Передайте текст или сегменты")
-    report = analyze(turns, script["company_phrases"], script["extra_script_phrases"])
+    report = analyze(turns, script["company_phrases"], script["extra_script_phrases"], script["checklist"])
     return QualityOut(
         politeness=report.politeness,
         completeness=report.completeness,

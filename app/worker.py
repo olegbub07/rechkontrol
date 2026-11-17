@@ -99,6 +99,7 @@ def process_call(call_id: int) -> None:
             script = load_script(session)
             company = list(script["company_phrases"])
             extra = list(script["extra_script_phrases"])
+            checklist = script["checklist"]
         raw, lang, audio, sr = transcribe_wav(tmp_wav, duration=duration, progress=on_progress)
         turns = from_whisper(
             raw,
@@ -109,7 +110,7 @@ def process_call(call_id: int) -> None:
             operator_channel=settings.stereo_operator_channel,
         )
         del audio, stereo
-        report = analyze(turns, company_phrases=company, extra_script_phrases=extra)
+        report = analyze(turns, company_phrases=company, extra_script_phrases=extra, checklist=checklist)
         report = llm_enrich(report, turns)
         full_text = " ".join(t["text"] for t in turns).strip()
         payload = report_to_json(report)

@@ -1221,6 +1221,7 @@ async function renderSettings(view) {
     $("#sc button").hidden = true;
     $("#sc").insertAdjacentHTML("beforeend", `<p class="muted">Скрипт меняет только администратор.</p>`);
   }
+  if (typeof mountChecklistEditor === "function") await mountChecklistEditor(view);
 }
 
 const AUDIT_RU = {

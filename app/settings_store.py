@@ -32,7 +32,10 @@ def put_json(session: Session, key: str, value) -> None:
 
 
 def load_script(session: Session) -> dict:
+    from app.checklist import load_checklist
+
     return {
         "company_phrases": get_json(session, "company_phrases", DEFAULTS["company_phrases"]),
         "extra_script_phrases": get_json(session, "extra_script_phrases", DEFAULTS["extra_script_phrases"]),
+        "checklist": load_checklist(session),
     }

@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
+from app.checklist import RUDE_PENALTY, by_id, default_checklist
 from app.diarize import normalize
 
 GREETINGS = (
@@ -396,7 +397,11 @@ def analyze(
     turns: list[dict],
     company_phrases: list[str] | None = None,
     extra_script_phrases: list[str] | None = None,
+    checklist: dict | None = None,
 ) -> QualityReport:
+    """Оценка по чек-листу. checklist=None - встроенные правила (app/checklist.py, значения по умолчанию)."""
+    checklist = checklist or default_checklist()
+    cfg = by_id(checklist)
     if not turns:
         empty = CheckResult(
             id="empty",
@@ -426,6 +431,17 @@ def analyze(
 
     company = tuple(p.strip().lower().replace("ё", "е") for p in (company_phrases or DEFAULT_COMPANY) if p.strip())
     extra = tuple(p.strip().lower().replace("ё", "е") for p in (extra_script_phrases or []) if p.strip())
+
+    def ph(cid: str) -> tuple[str, ...]:
+        source = cfg[cid]["phrases"]
+        if source == "company":
+            return company
+        if source == "extra":
+            return extra
+        return tuple(source or ())
+
+    def on(cid: str) -> bool:
+        return bool(cfg[cid].get("enabled", True)) and float(cfg[cid].get("weight", 0)) > 0
     op_text = _join(turns, "operator")
     client_text = _join(turns, "client")
     all_text = _join(turns)
@@ -436,24 +452,26 @@ def analyze(
     answered_n = sum(1 for q in questions if _answered(q, turns))
     answer_ratio = 1.0 if not questions else answered_n / len(questions)
     op_avg_len = (sum(len(t["text"]) for t in op_turns) / len(op_turns)) if op_turns else 0
-    rude_hit = _has(op_text, RUDENESS)
+    rude_hit = _has(op_text, ph("no_rudeness")) if on("no_rudeness") else None
     ty_hit = bool(TY_RE.search(" " + op_text + " "))
-    courtesy_n = _count(op_text, COURTESY)
-    greet_hit = _has(op_text[:220] if op_text else "", GREETINGS) or (
-        _has(normalize(op_turns[0]["text"]), GREETINGS) if op_turns else None
+    courtesy_n = _count(op_text, ph("courtesy"))
+    greet_hit = _has(op_text[:220] if op_text else "", ph("greeting")) or (
+        _has(normalize(op_turns[0]["text"]), ph("greeting")) if op_turns else None
     )
 
     checks: list[CheckResult] = []
 
     def add(cid, title, category, passed, score, weight, detail, evidence=None):
+        if not on(cid):
+            return
         checks.append(
             CheckResult(
                 id=cid,
-                title=title,
+                title=cfg[cid]["title"],
                 category=category,
                 passed=bool(passed),
                 score=_clip(score),
-                weight=weight,
+                weight=float(cfg[cid]["weight"]),
                 detail=detail,
                 evidence=evidence,
             )
@@ -467,9 +485,9 @@ def analyze(
         100 if greet_hit else 15,
         1.2,
         "Оператор поприветствовал клиента." if greet_hit else "В начале разговора нет приветствия.",
-        _evidence(op_turns[:2], GREETINGS) if greet_hit else None,
+        _evidence(op_turns[:2], ph("greeting")) if greet_hit else None,
     )
-    intro_hit = _has(op_text, INTRO)
+    intro_hit = _has(op_text, ph("intro"))
     add(
         "intro",
         "Представление оператора",
@@ -478,7 +496,7 @@ def analyze(
         100 if intro_hit else 20,
         1.0,
         "Оператор назвал себя." if intro_hit else "Оператор не представился.",
-        _evidence(turns, INTRO) if intro_hit else None,
+        _evidence(turns, ph("intro")) if intro_hit else None,
     )
     company_hit = _has(op_text, company)
     add(
@@ -491,7 +509,7 @@ def analyze(
         "Названа организация." if company_hit else "В речи оператора нет названия компании.",
         _evidence(turns, company) if company_hit else None,
     )
-    help_hit = _has(op_text, HELP_OFFER)
+    help_hit = _has(op_text, ph("help_offer"))
     add(
         "help_offer",
         "Предложение помощи",
@@ -500,9 +518,9 @@ def analyze(
         100 if help_hit else 30,
         0.9,
         "Есть предложение помощи." if help_hit else "Нет явного «чем могу помочь».",
-        _evidence(turns, HELP_OFFER) if help_hit else None,
+        _evidence(turns, ph("help_offer")) if help_hit else None,
     )
-    clarify_hit = _has(op_text, CLARIFY)
+    clarify_hit = _has(op_text, ph("clarify"))
     add(
         "clarify",
         "Уточнение запроса",
@@ -511,9 +529,9 @@ def analyze(
         100 if clarify_hit else 35,
         1.0,
         "Оператор уточнил детали обращения." if clarify_hit else "Нет уточняющих вопросов по сути запроса.",
-        _evidence(turns, CLARIFY) if clarify_hit else None,
+        _evidence(turns, ph("clarify")) if clarify_hit else None,
     )
-    close_hit = _has(op_text, CLOSINGS)
+    close_hit = _has(op_text, ph("closing"))
     add(
         "closing",
         "Корректное завершение",
@@ -522,7 +540,7 @@ def analyze(
         100 if close_hit else 25,
         1.0,
         "Диалог закрыт вежливой формулой." if close_hit else "Нет прощания и предложения обратиться снова.",
-        _evidence(turns, CLOSINGS) if close_hit else None,
+        _evidence(turns, ph("closing")) if close_hit else None,
     )
     extra_hit = _has(op_text, extra) if extra else None
     if extra:
@@ -546,7 +564,7 @@ def analyze(
         courtesy_score,
         1.1,
         f"Вежливых формул в речи оператора: {courtesy_n}.",
-        _evidence(turns, COURTESY) if courtesy_n else None,
+        _evidence(turns, ph("courtesy")) if courtesy_n else None,
     )
     add(
         "no_rudeness",
@@ -556,7 +574,7 @@ def analyze(
         0 if rude_hit else 100,
         1.6,
         f"Обнаружена резкая формулировка: «{rude_hit}»." if rude_hit else "Грубых формулировок нет.",
-        _evidence(turns, RUDENESS) if rude_hit else None,
+        _evidence(turns, ph("no_rudeness")) if rude_hit else None,
     )
     add(
         "no_tutoyage",
@@ -567,7 +585,7 @@ def analyze(
         1.0,
         "Оператор перешёл на «ты»." if ty_hit else "Соблюдено обращение на «вы».",
     )
-    empathy_hit = _has(op_text, EMPATHY)
+    empathy_hit = _has(op_text, ph("empathy"))
     client_neg = bool(_has(client_text, NEG_WORDS))
     empathy_needed = client_neg
     empathy_ok = bool(empathy_hit) or not empathy_needed
@@ -581,7 +599,7 @@ def analyze(
         "Оператор обозначил понимание ситуации."
         if empathy_hit
         else ("Клиент спокоен, эмпатия не обязательна." if not empathy_needed else "Клиент встревожен, эмпатии в ответах нет."),
-        _evidence(turns, EMPATHY) if empathy_hit else None,
+        _evidence(turns, ph("empathy")) if empathy_hit else None,
     )
     interrupt_ok = interrupts == 0
     add(
@@ -628,7 +646,7 @@ def analyze(
         resp_detail = f"Средняя пауза перед ответом оператора: {avg_resp:.1f} с."
     add("response_time", "Время ответа", "completeness", resp_ok, resp_score, 0.8, resp_detail)
 
-    res_hit = _has(op_text, RESOLUTION)
+    res_hit = _has(op_text, ph("resolution_lang"))
     add(
         "resolution_lang",
         "Предложено решение",
@@ -637,9 +655,9 @@ def analyze(
         100 if res_hit else 30,
         1.3,
         "Оператор озвучил конкретное действие или результат." if res_hit else "Нет явного решения или фиксации результата.",
-        _evidence(turns, RESOLUTION) if res_hit else None,
+        _evidence(turns, ph("resolution_lang")) if res_hit else None,
     )
-    next_hit = _has(op_text, NEXT_STEPS)
+    next_hit = _has(op_text, ph("next_steps"))
     add(
         "next_steps",
         "Понятные следующие шаги",
@@ -648,9 +666,9 @@ def analyze(
         100 if next_hit else 35,
         1.1,
         "Назван срок, канал или номер обращения." if next_hit else "Клиент не получил ясного следующего шага.",
-        _evidence(turns, NEXT_STEPS) if next_hit else None,
+        _evidence(turns, ph("next_steps")) if next_hit else None,
     )
-    confirm_hit = _has(op_text, ("вопрос решён", "вопрос решен", "всё получилось", "все получилось", "помог", "ещё вопросы", "еще вопросы", "остались ли вопросы")) or _has(
+    confirm_hit = _has(op_text, ph("confirm")) or _has(
         client_text, CLIENT_OK
     )
     add(
@@ -662,7 +680,7 @@ def analyze(
         1.0,
         "Есть подтверждение закрытия вопроса." if confirm_hit else "Нет подтверждения, что клиент удовлетворён.",
     )
-    bounce = _has(op_text, ("это к нам не относится", "не туда попали", "вам на горячую", "перезвоните сами", "я не знаю"))
+    bounce = _has(op_text, ph("no_hanging"))
     hanging = (not close_hit and not res_hit) or bool(bounce)
     add(
         "no_hanging",
@@ -672,16 +690,19 @@ def analyze(
         25 if hanging else 100,
         1.2,
         "Клиента отправили «не туда» или разговор оборван без решения." if hanging else "Разговор доведён до завершения.",
-        _evidence(turns, ("это к нам не относится", "не туда попали", "вам на горячую")) if bounce else None,
+        _evidence(turns, ph("no_hanging")) if bounce else None,
     )
 
     politeness = _weighted(checks, "politeness")
     completeness = _weighted(checks, "completeness")
     script = _weighted(checks, "script")
     resolution = _weighted(checks, "resolution")
-    overall = _clip(0.28 * politeness + 0.22 * completeness + 0.25 * script + 0.25 * resolution)
+    cw = checklist.get("category_weights") or {}
+    parts = {"politeness": politeness, "completeness": completeness, "script": script, "resolution": resolution}
+    total_w = sum(float(cw.get(k, 0)) for k in parts) or 1.0
+    overall = _clip(sum(float(cw.get(k, 0)) * v for k, v in parts.items()) / total_w)
     if rude_hit:
-        overall = _clip(overall * 0.72)
+        overall = _clip(overall * RUDE_PENALTY)
 
     violations = [
         {"id": c.id, "title": c.title, "detail": c.detail, "category": c.category}
