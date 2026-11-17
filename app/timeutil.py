@@ -28,6 +28,15 @@ def display_zone() -> tzinfo:
     return timezone(timedelta(hours=3), "Europe/Moscow")
 
 
+def local_now() -> datetime:
+    """Сейчас по местному времени (DISPLAY_TZ, по умолчанию Москва), без зоны.
+
+    Так хранится время звонка (call_at): оно же приходит из имени файла и формы загрузки
+    как местное. Служебные отметки (uploaded_at, журнал) остаются в UTC.
+    """
+    return datetime.now(timezone.utc).astimezone(display_zone()).replace(tzinfo=None)
+
+
 def to_local(value: datetime | None) -> datetime | None:
     """Наивное UTC-время из базы в местное (DISPLAY_TZ) с явной зоной."""
     if value is None:

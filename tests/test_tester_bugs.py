@@ -198,11 +198,11 @@ def test_xlsx_export_has_real_numbers_and_standard_csv(monkeypatch):
         rows = [[c.value for c in r] for r in ws.iter_rows(min_row=2)]
         # в общей базе тестов есть свежие звонки без оценки, берём готовый
         row = next(r for r in rows if r[head.index("Итоговое качество")] is not None)
-        assert all(isinstance(r[head.index("Дата и время")], datetime) for r in rows)
+        assert all(isinstance(r[head.index("Дата и время (МСК)")], datetime) for r in rows)
         assert isinstance(row[head.index("Итоговое качество")], (int, float))
         durations = [r[head.index("Длительность, сек")] for r in rows if r[head.index("Длительность, сек")] is not None]
         assert durations and all(isinstance(d, (int, float)) for d in durations)
-        assert isinstance(row[head.index("Дата и время")], datetime)
+        assert isinstance(row[head.index("Дата и время (МСК)")], datetime)
         assert row[head.index("Тональность")] in {"позитивная", "нейтральная", "негативная"}
         std = client.get("/api/export/csv?style=standard", headers=h)
         assert std.status_code == 200 and "_standard.csv" in std.headers["content-disposition"]
@@ -226,3 +226,22 @@ def auth_operator(client):
             return None
     ensure_user("qa.xl.operator", "operator", "OP-104")
     return auth(client, "qa.xl.operator")
+
+
+def test_upload_time_is_moscow_in_export(monkeypatch):
+    """Звонок без даты в имени получает местное время загрузки, экспорт не отстаёт на 3 часа."""
+    from datetime import timedelta
+
+    from app.timeutil import local_now
+
+    ensure_user("qa.tz.analyst", "analyst")
+    with _client(monkeypatch) as client:
+        h = auth(client, "qa.tz.analyst")
+        up = client.post("/api/calls/upload", headers=h, files=[("files", ("tz_check.wav", _wav_bytes(1.0), "audio/wav"))]).json()[0]
+        got = datetime.fromisoformat(up["call_at"])
+        assert abs(got - local_now()) < timedelta(minutes=2)
+        detail = client.get(f"/api/calls/{up['id']}", headers=h).json()
+        assert detail["uploaded_at"].endswith("+03:00")
+        text = client.get("/api/export/csv", headers=h).content.decode("utf-8-sig")
+        assert "Дата и время (МСК)" in text.splitlines()[0]
+        assert got.strftime("%H:%M") in text

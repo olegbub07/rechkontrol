@@ -12,7 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.timeutil import date_from_filename, operator_code_from_filename, utcnow
+from app.timeutil import date_from_filename, local_now, operator_code_from_filename, utcnow
 from app.access import is_operator, limit_calls, reject_operator, require_call
 from app.api.deps import current_user, db_session, require_admin
 from app.api.serializers import call_detail, call_item, operator_out
@@ -218,7 +218,8 @@ async def upload_calls(
         raise HTTPException(400, "Добавьте хотя бы один аудиофайл")
     if len(files) > settings.max_upload_files:
         raise HTTPException(400, f"За один раз можно загрузить не больше {settings.max_upload_files} файлов")
-    when = utcnow()
+    # Время звонка - местное, как в имени файла и в форме. Раньше тут было UTC, и экспорт отставал на 3 часа.
+    when = local_now()
     if call_at:
         try:
             when = datetime.fromisoformat(call_at.replace("Z", ""))

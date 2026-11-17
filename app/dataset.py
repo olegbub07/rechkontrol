@@ -11,7 +11,7 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 from pathlib import Path
 
-from app.timeutil import utcnow
+from app.timeutil import local_now, utcnow
 from app.config import settings
 from app.crypto import encrypt_bytes
 from app.db import SessionLocal
@@ -292,7 +292,7 @@ def import_to_queue(limit: int | None = None) -> list[int]:
                     stored_name=stored,
                     mime="audio/wav",
                     operator_id=op.id,
-                    call_at=utcnow(),
+                    call_at=local_now(),
                     status="queued",
                     progress=0,
                     is_demo=0,

@@ -6,6 +6,7 @@ from app.config import settings
 from app.highlight import segment_highlights
 from app.models import Call
 from app.pii import mask_segments, mask_text
+from app.timeutil import to_local
 from app.schemas import CallDetail, CallListItem, CheckOut, MarkerOut, OperatorOut, QualityOut, SegmentOut, SpanOut
 
 
@@ -61,7 +62,7 @@ def call_item(call: Call) -> CallListItem:
         status=call.status,
         progress=call.progress,
         call_at=call.call_at,
-        uploaded_at=call.uploaded_at,
+        uploaded_at=to_local(call.uploaded_at),  # в базе UTC, наружу - с явной зоной
         duration_sec=call.duration_sec,
         operator_id=call.operator_id,
         operator_name=op.name if op else None,

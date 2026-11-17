@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.access import reject_operator
 from app.api.deps import current_user, db_session
 from app.audit import write_audit
+from app.config import settings
 from app.api.serializers import call_detail
 from app.models import Call, User
 
@@ -20,9 +21,12 @@ router = APIRouter(tags=["export"])
 TONALITY_RU = {"positive": "позитивная", "neutral": "нейтральная", "negative": "негативная"}
 STATUS_RU = {"queued": "в очереди", "processing": "обрабатывается", "done": "готово", "error": "ошибка"}
 
+# Время звонка хранится местным (DISPLAY_TZ), в заголовке это видно сразу.
+_DT_TITLE = "Дата и время (МСК)" if (settings.display_tz or "Europe/Moscow") == "Europe/Moscow" else f"Дата и время ({settings.display_tz})"
+
 CSV_COLUMNS = [
     ("call_id", "Идентификатор звонка"),
-    ("datetime", "Дата и время"),
+    ("datetime", _DT_TITLE),
     ("operator_id", "Идентификатор оператора"),
     ("operator_name", "Оператор"),
     ("filename", "Файл"),
