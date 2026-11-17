@@ -192,6 +192,24 @@ def _example(call: Call, label: str, st: dict) -> list:
     return [KeepTogether(items)]
 
 
+WEAK_BELOW = 80  # ниже этой оценки звонок считается слабым (как «требует внимания» в интерфейсе)
+
+
+def example_picks(calls: list[Call]) -> list[tuple[str, Call]]:
+    """До двух слабых звонков (оценка ниже WEAK_BELOW) и лучший. Если слабых нет, честно пишем «самый низкий балл»."""
+    if not calls:
+        return []
+    ordered = sorted(calls, key=lambda c: (c.quality.overall, c.id))
+    weak = [c for c in ordered if c.quality.overall < WEAK_BELOW][:2]
+    picks: list[tuple[str, Call]] = [("Слабый", c) for c in weak]
+    best = ordered[-1]
+    if not weak and len(ordered) > 1:
+        picks.append(("Самый низкий балл периода", ordered[0]))
+    if best not in [c for _, c in picks]:
+        picks.append(("Лучший", best))
+    return picks
+
+
 def build_operator_report(
     operator: Operator,
     calls: list[Call],
@@ -275,14 +293,13 @@ def build_operator_report(
     else:
         story.append(_p("Все пункты чек-листа выполнены во всех звонках периода.", st["base"]))
 
-    story.append(_p("Примеры звонков (персональные данные скрыты)", st["h2"]))
-    ordered = sorted(calls, key=lambda c: (c.quality.overall, c.id))
-    picks: list[tuple[str, Call]] = [("Слабый", c) for c in ordered[:2]]
-    best = ordered[-1]
-    if best not in [c for _, c in picks]:
-        picks.append(("Лучший", best))
-    for label, call in picks:
-        story += _example(call, label, st)
+    heading = _p("Примеры звонков (персональные данные скрыты)", st["h2"])
+    for i, (label, call) in enumerate(example_picks(calls)):
+        block = _example(call, label, st)
+        if i == 0:
+            # заголовок не должен висеть один внизу страницы
+            block = [KeepTogether([heading, *block[0]._content])]
+        story += block
 
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()

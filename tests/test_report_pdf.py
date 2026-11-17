@@ -85,3 +85,22 @@ def test_pdf_report_validation():
         assert empty.status_code == 200 and empty.content.startswith(b"%PDF")
         default = client.get(f"/api/reports/operator/{op_id}.pdf", headers=h)
         assert default.status_code == 200
+
+
+def test_pdf_example_labels_follow_score():
+    from types import SimpleNamespace
+
+    from app.report_pdf import example_picks
+
+    def call(i, score):
+        return SimpleNamespace(id=i, quality=SimpleNamespace(overall=score))
+
+    high = [call(1, 91), call(2, 92), call(3, 97)]
+    labels = [(label, c.id) for label, c in example_picks(high)]
+    assert ("Слабый", 1) not in labels and all(label != "Слабый" for label, _ in labels)
+    assert labels == [("Самый низкий балл периода", 1), ("Лучший", 3)]
+
+    mixed = [call(1, 40), call(2, 75), call(3, 85), call(4, 95)]
+    assert [(label, c.id) for label, c in example_picks(mixed)] == [("Слабый", 1), ("Слабый", 2), ("Лучший", 4)]
+    assert [label for label, _ in example_picks([call(1, 50)])] == ["Слабый"]
+    assert example_picks([]) == []
