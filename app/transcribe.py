@@ -167,7 +167,49 @@ def transcribe_wav(
         segments_iter, info = model.transcribe(audio, **kwargs)
     raw: list[dict] = []
     total = duration or 0.0
-    for seg in segments_iter:
+    batched = bool(profile["use_batch"] and _batch_pipe is not None)
+
+    def _redecode(seg) -> list:
+        # Батч-режим без температурного отката иногда зацикливается на куске
+        # («Добрый день. Добрый день...»), и кусок целиком выбрасывался как
+        # галлюцинация. Перепроверяем такой кусок обычным проходом.
+        s0 = max(0, int(float(seg.start) * sr))
+        s1 = min(len(audio), int(float(seg.end) * sr))
+        if s1 - s0 < sr // 2:
+            return []
+        seq = dict(kwargs)
+        seq.pop("chunk_length", None)
+        seq["temperature"] = (0.0, 0.2, 0.4, 0.6)
+        seq["initial_prompt"] = BANK_PROMPT
+        try:
+            sub, _ = model.transcribe(audio[s0:s1], **seq)
+        except TypeError:
+            seq.pop("hallucination_silence_threshold", None)
+            sub, _ = model.transcribe(audio[s0:s1], **seq)
+        off = s0 / float(sr)
+        out = []
+        for x in sub:
+            x.start = float(x.start) + off
+            x.end = float(x.end) + off
+            for w in x.words or []:
+                w.start = float(w.start) + off
+                w.end = float(w.end) + off
+            out.append(x)
+        return out
+
+    def _segments():
+        for seg in segments_iter:
+            bad = is_hallucination(
+                getattr(seg, "no_speech_prob", None),
+                getattr(seg, "avg_logprob", None),
+                getattr(seg, "compression_ratio", None),
+            )
+            if bad and batched:
+                yield from _redecode(seg)
+            else:
+                yield seg
+
+    for seg in _segments():
         words = []
         for word in seg.words or []:
             token = (word.word or "").strip()
