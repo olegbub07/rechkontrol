@@ -100,7 +100,15 @@ def list_calls(
 
 
 @router.get("/calls/{call_id}", response_model=CallDetail)
-def get_call(call_id: int, session: Session = Depends(db_session), user: User = Depends(current_user)) -> CallDetail:
+def get_call(
+    call_id: int,
+    request: Request,
+    unmasked: bool = Query(False),
+    session: Session = Depends(db_session),
+    user: User = Depends(current_user),
+) -> CallDetail:
+    if unmasked and user.role != "admin":
+        raise HTTPException(403, "Текст без маскирования доступен только администратору")
     call = (
         session.query(Call)
         .options(joinedload(Call.operator), joinedload(Call.quality), joinedload(Call.transcript))
@@ -108,7 +116,9 @@ def get_call(call_id: int, session: Session = Depends(db_session), user: User = 
         .one_or_none()
     )
     require_call(call, user)
-    return call_detail(call)
+    if unmasked:
+        write_audit(session, "call.unmask", user=user, detail=str(call_id), request=request)
+    return call_detail(call, unmasked=unmasked)
 
 
 async def _read_limited(upload: UploadFile, max_bytes: int) -> bytes:

@@ -1,7 +1,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false };
+const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false, unmaskedCall: null };
 const OPERATOR_BLOCKED = ["upload", "operators", "export", "dataset", "settings", "admin"];
 
 function token() {
@@ -564,7 +564,11 @@ async function renderCall(view, id) {
     reviewer ? "Прослушивание, поиск по репликам, чек-лист и заметка рецензента" : "Прослушивание и оценка вашего разговора",
     "Разбор",
   );
-  const call = await api(`/calls/${id}`);
+  const isAdmin = state.user?.role === "admin";
+  if (state.unmaskedCall !== id) state.unmaskedCall = null;
+  const unmasked = isAdmin && state.unmaskedCall === id;
+  const callUrl = `/calls/${id}${unmasked ? "?unmasked=true" : ""}`;
+  const call = await api(callUrl);
   const q = call.quality;
   const live = call.status === "queued" || call.status === "processing";
   view.innerHTML = `
@@ -572,6 +576,7 @@ async function renderCall(view, id) {
       <a class="btn ghost" href="#/calls">← к журналу</a>
       ${reviewer ? `<button class="btn ghost" id="flag" type="button">${call.flagged ? "Снять пометку" : "Пометить"}</button>` : ""}
       <button class="btn ghost" id="copy-text" type="button">Копировать текст</button>
+      ${isAdmin ? `<button class="btn ghost" id="toggle-pii" type="button">${unmasked ? "Скрыть персональные данные" : "Показать без маскирования"}</button>` : ""}
       ${reviewer && call.has_audio ? `<button class="btn" id="reprocess" type="button">Повторить обработку</button>` : ""}
       ${state.user?.role === "admin" ? `<button class="btn danger" id="del" type="button">Удалить</button>` : ""}
     </div>
@@ -698,7 +703,7 @@ async function renderCall(view, id) {
         return;
       }
       try {
-        const fresh = await api(`/calls/${id}`);
+        const fresh = await api(callUrl);
         if (!fresh.has_audio || state.audioToken !== audioToken) return;
         clearInterval(wait);
         call.segments = fresh.segments || call.segments;
@@ -709,6 +714,12 @@ async function renderCall(view, id) {
         /* следующий тик повторит запрос */
       }
     }, 4000);
+  }
+  if ($("#toggle-pii")) {
+    $("#toggle-pii").onclick = () => {
+      state.unmaskedCall = unmasked ? null : id;
+      renderCall(view, id);
+    };
   }
   $("#copy-text").onclick = async () => {
     const text = call.full_text || (call.segments || []).map((s) => s.text).join("\n");
@@ -768,7 +779,7 @@ async function renderCall(view, id) {
     setLive(async () => {
       if (state.callToken !== tokenId) return;
       try {
-        const next = await api(`/calls/${id}`);
+        const next = await api(callUrl);
         if (state.callToken !== tokenId) return;
         if (next.status === "done" || next.status === "error") {
           setLive(null);

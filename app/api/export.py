@@ -129,17 +129,20 @@ def export_json(
     date_from: str | None = None,
     date_to: str | None = None,
     full: bool = Query(False),
+    unmasked: bool = Query(False),
     session: Session = Depends(db_session),
     user: User = Depends(current_user),
 ):
     reject_operator(user)
     if full and user.role != "admin":
         raise HTTPException(403, "Полный экспорт с расшифровками доступен администратору")
+    if unmasked and not full:
+        raise HTTPException(400, "Параметр unmasked имеет смысл только с full=true")
     calls = _rows(session, operator_id, date_from, date_to)
-    write_audit(session, "export.json", user=user, detail=f"{len(calls)} full={int(full)}", request=request)
+    write_audit(session, "export.json", user=user, detail=f"{len(calls)} full={int(full)} unmasked={int(unmasked)}", request=request)
     session.commit()
     if full:
-        data = [json.loads(call_detail(c).model_dump_json()) for c in calls]
+        data = [json.loads(call_detail(c, unmasked=unmasked).model_dump_json()) for c in calls]
     else:
         data = [_flat(c) for c in calls]
     payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")

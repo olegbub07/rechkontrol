@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     max_duration_sec: int = 900
     jwt_ttl_hours: int = 12
     allow_remote: bool = False
+    # Маскирование ПДн в выдаче и экспорте. Исходный текст видит только администратор по явному запросу.
+    pii_masking: bool = True
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0

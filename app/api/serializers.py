@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 
+from app.config import settings
 from app.models import Call
+from app.pii import mask_segments, mask_text
 from app.schemas import CallDetail, CallListItem, CheckOut, OperatorOut, QualityOut, SegmentOut
 
 
@@ -105,7 +107,7 @@ def _segments(raw: list) -> list[SegmentOut]:
     return segments
 
 
-def _checks(raw: list) -> list[CheckOut]:
+def _checks(raw: list, mask=lambda value: value) -> list[CheckOut]:
     checks: list[CheckOut] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -120,7 +122,7 @@ def _checks(raw: list) -> list[CheckOut]:
                     score=float(item.get("score") or 0),
                     weight=float(item.get("weight") or 0),
                     detail=str(item.get("detail") or ""),
-                    evidence=None if item.get("evidence") is None else str(item.get("evidence")),
+                    evidence=None if item.get("evidence") is None else mask(str(item.get("evidence"))),
                 )
             )
         except (TypeError, ValueError):
@@ -128,13 +130,21 @@ def _checks(raw: list) -> list[CheckOut]:
     return checks
 
 
-def call_detail(call: Call) -> CallDetail:
+def _mask_violation(item: dict, mask) -> dict:
+    return {key: mask(value) if isinstance(value, str) and key in {"evidence", "text", "quote"} else value for key, value in item.items()}
+
+
+def call_detail(call: Call, unmasked: bool = False) -> CallDetail:
+    """Расшифровка в ответе API маскируется (ПДн), если не запрошен исходный текст."""
+    masking = settings.pii_masking and not unmasked
+    mask = mask_text if masking else (lambda value: value)
     base = call_item(call)
     full_text = ""
     segments: list[SegmentOut] = []
     if call.transcript:
-        full_text = call.transcript.full_text
-        segments = _segments(_json_list(call.transcript.segments_json))
+        full_text = mask(call.transcript.full_text)
+        raw_segments = _json_list(call.transcript.segments_json)
+        segments = _segments(mask_segments(raw_segments) if masking else raw_segments)
     quality = None
     if call.quality:
         q = call.quality
@@ -149,10 +159,10 @@ def call_detail(call: Call) -> CallDetail:
             avg_response_sec=q.avg_response_sec,
             talk_ratio_operator=q.talk_ratio_operator,
             violation_pct=q.violation_pct,
-            violations=[item for item in _json_list(q.violations_json) if isinstance(item, dict)],
-            recommendations=[str(item) for item in _json_list(q.recommendations_json)],
-            checks=_checks(_json_list(q.checks_json)),
-            summary=q.summary,
+            violations=[_mask_violation(item, mask) for item in _json_list(q.violations_json) if isinstance(item, dict)],
+            recommendations=[mask(str(item)) for item in _json_list(q.recommendations_json)],
+            checks=_checks(_json_list(q.checks_json), mask),
+            summary=mask(q.summary),
         )
     return CallDetail(
         **base.model_dump(),
@@ -164,4 +174,5 @@ def call_detail(call: Call) -> CallDetail:
         segments=segments,
         quality=quality,
         review_note=call.review_note or "",
+        masked=masking,
     )

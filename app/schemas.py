@@ -142,6 +142,7 @@ class CallDetail(CallListItem):
     segments: list[SegmentOut] = Field(default_factory=list)
     quality: QualityOut | None = None
     review_note: str = ""
+    masked: bool = False
 
 
 class DashboardKpis(BaseModel):
