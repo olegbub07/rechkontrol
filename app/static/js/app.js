@@ -141,6 +141,11 @@ function applyRoleNav() {
   if (side) side.textContent = role === "operator" ? "кабинет оператора" : role === "admin" ? "кабинет администратора" : "локальный контур";
 }
 
+function syncPasswordDialog() {
+  const cancel = $("#pwd-cancel");
+  if (cancel) cancel.hidden = !!state.user?.must_change_password;
+}
+
 function showShell() {
   $("#login").hidden = true;
   $("#shell").hidden = false;
@@ -152,6 +157,7 @@ function showShell() {
   $("#who-av").textContent = initials(name || "•");
   applyRoleNav();
   showBanner();
+  syncPasswordDialog();
   if (state.user?.must_change_password && !state.passwordNudge) {
     state.passwordNudge = true;
     openAccount();
@@ -214,6 +220,11 @@ function highlight(text, q) {
   const needle = escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return safe.replace(new RegExp(needle, "ig"), (m) => `<mark>${m}</mark>`);
 }
+function meter(value, cls = "meter", attrs = "") {
+  const v = Math.max(0, Math.min(100, Number(value) || 0));
+  return `<progress class="${cls}" max="100" value="${v.toFixed(1)}" ${attrs}></progress>`;
+}
+
 function metricBars(op) {
   const rows = [
     ["Вежливость", op.avg_politeness],
@@ -223,7 +234,7 @@ function metricBars(op) {
   ].filter((pair) => pair[1] != null);
   if (!rows.length) return "";
   return `<div class="bars mt">${rows.map(([label, v]) => `
-    <div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, v))}%"></div></div><b>${Number(v).toFixed(0)}</b></div>
+    <div class="bar-row"><span>${label}</span>${meter(v)}<b>${Number(v).toFixed(0)}</b></div>
   `).join("")}</div>`;
 }
 
@@ -268,11 +279,17 @@ async function route() {
   }
   showShell();
   const parts = hashParts();
+  const view = $("#view");
+  if (state.user?.must_change_password) {
+    view.innerHTML = `<div class="card featured"><h2>Смените пароль</h2><p class="muted">Кабинет откроется после смены стартового пароля. Пока он действует, звонки и отчёты недоступны.</p><button class="btn gold row" id="force-pwd" type="button">Сменить пароль</button></div>`;
+    $("#force-pwd").onclick = openAccount;
+    openAccount();
+    return;
+  }
   if (state.user?.role === "operator" && OPERATOR_BLOCKED.includes(parts[0])) {
     location.hash = "#/";
     return;
   }
-  const view = $("#view");
   view.innerHTML = `<div class="card"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
   try {
     if (parts[0] === "calls" && parts[1]) await renderCall(view, parts[1]);
@@ -300,25 +317,104 @@ async function refreshQueueChip() {
   } catch {}
 }
 
+const TREND_MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+
+function trendDateParts(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!match) return null;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year: match[1], month, day };
+}
+
+function trendTickLabel(iso) {
+  const parts = trendDateParts(iso);
+  if (!parts) return "";
+  return `${String(parts.day).padStart(2, "0")}.${String(parts.month).padStart(2, "0")}`;
+}
+
+function trendFullLabel(iso) {
+  const parts = trendDateParts(iso);
+  if (!parts) return String(iso || "");
+  return `${parts.day} ${TREND_MONTHS[parts.month - 1]} ${parts.year}`;
+}
+
+function trendLabelIndexes(count) {
+  if (count <= 1) return [0];
+  const want = Math.min(count, count <= 7 ? count : 6);
+  const indexes = [];
+  for (let step = 0; step < want; step += 1) {
+    const index = Math.round((step * (count - 1)) / (want - 1));
+    if (!indexes.includes(index)) indexes.push(index);
+  }
+  return indexes;
+}
+
 function areaChart(el, points, key, color) {
-  const w = 560, h = 190, p = 28;
+  const w = 640;
+  const h = 268;
+  const plotL = 64;
+  const plotR = w - 18;
+  const plotT = 18;
+  const plotB = h - 52;
+  const plotW = plotR - plotL;
+  const plotH = plotB - plotT;
   if (!points.length) {
-    el.innerHTML = `<p class="muted">Недостаточно точек для тренда</p>`;
+    el.innerHTML = `<p class="muted">Пока нет оценённых звонков, поэтому тренд не из чего построить.</p>`;
     return;
   }
-  const vals = points.map((d) => d[key]);
-  const max = Math.max(100, ...vals);
-  const xs = (i) => p + (i * (w - p * 2)) / Math.max(points.length - 1, 1);
-  const ys = (v) => h - p - (v / max) * (h - p * 2);
-  const line = points.map((d, i) => `${i ? "L" : "M"} ${xs(i).toFixed(1)} ${ys(d[key]).toFixed(1)}`).join(" ");
-  const area = `${line} L ${xs(points.length - 1).toFixed(1)} ${h - p} L ${xs(0).toFixed(1)} ${h - p} Z`;
-  const labels = points.filter((_, i) => i === 0 || i === points.length - 1 || i % Math.ceil(points.length / 5) === 0);
-  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="190" role="img">
-    <path d="${area}" fill="${color}" opacity="0.14"/>
-    <path d="${line}" fill="none" stroke="${color}" stroke-width="2.2"/>
-    ${points.map((d, i) => `<circle cx="${xs(i)}" cy="${ys(d[key])}" r="3" fill="${color}"/>`).join("")}
-    ${labels.map((d) => `<text x="${xs(points.indexOf(d))}" y="${h - 8}" font-size="11" fill="#6a766d" text-anchor="middle">${d.date.slice(8)}</text>`).join("")}
-  </svg>`;
+  const scores = points.map((point) => Number(point[key]) || 0);
+  const xs = (index) => (points.length === 1 ? plotL + plotW / 2 : plotL + (index * plotW) / (points.length - 1));
+  const ys = (value) => plotB - (Math.max(0, Math.min(100, value)) / 100) * plotH;
+  const yTicks = [0, 25, 50, 75, 100].map((tick) => {
+    const y = ys(tick).toFixed(1);
+    return `<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="#142119" stroke-opacity="0.08"/>
+      <text x="${plotL - 8}" y="${Number(y) + 4}" text-anchor="end" font-size="11" fill="#6a766d">${tick}</text>`;
+  }).join("");
+  const thresholdY = ys(60).toFixed(1);
+  const line = points.map((point, index) => `${index ? "L" : "M"} ${xs(index).toFixed(1)} ${ys(scores[index]).toFixed(1)}`).join(" ");
+  const area = `${line} L ${xs(points.length - 1).toFixed(1)} ${plotB} L ${xs(0).toFixed(1)} ${plotB} Z`;
+  const xLabels = trendLabelIndexes(points.length).map((index) => {
+    const x = xs(index).toFixed(1);
+    return `<line x1="${x}" y1="${plotB}" x2="${x}" y2="${plotB + 5}" stroke="#6a766d"/>
+      <text x="${x}" y="${plotB + 18}" text-anchor="middle" font-size="11" fill="#6a766d">${escapeHtml(trendTickLabel(points[index].date))}</text>`;
+  }).join("");
+  const dots = points.map((point, index) => {
+    const calls = Number(point.count) || 0;
+    const callMod = calls % 100;
+    const callLast = callMod % 10;
+    const callWord = callMod > 10 && callMod < 20 ? "звонков" : callLast === 1 ? "звонок" : callLast >= 2 && callLast <= 4 ? "звонка" : "звонков";
+    const title = `${trendFullLabel(point.date)}: ${scores[index].toFixed(1)} балла, ${calls} ${callWord}`;
+    return `<circle cx="${xs(index).toFixed(1)}" cy="${ys(scores[index]).toFixed(1)}" r="3.6" fill="${color}"><title>${escapeHtml(title)}</title></circle>`;
+  }).join("");
+  const low = Math.min(...scores);
+  const high = Math.max(...scores);
+  const from = trendFullLabel(points[0].date);
+  const to = trendFullLabel(points[points.length - 1].date);
+  const span = points.length === 1
+    ? `${from}: ${scores[0].toFixed(0)} баллов.`
+    : `С ${from} по ${to} балл за день от ${low.toFixed(0)} до ${high.toFixed(0)}.`;
+  const caption = `${span} Вертикальная ось — оценка от 0 до 100. Горизонтальная ось — дата. Пунктир — порог 60: ниже него звонок попадает в «Нужно внимание».`;
+  el.innerHTML = `<figure class="chart-frame">
+    <div class="chart-key">
+      <span><span class="swatch pos"></span>средний балл за день</span>
+      <span><span class="swatch neu"></span>порог внимания 60</span>
+    </div>
+    <svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="${escapeHtml(caption)}" font-family="Segoe UI, sans-serif">
+      ${yTicks}
+      <line x1="${plotL}" y1="${thresholdY}" x2="${plotR}" y2="${thresholdY}" stroke="#c9a44a" stroke-dasharray="4 4" stroke-width="1.3"/>
+      <path d="${area}" fill="${color}" opacity="0.14"/>
+      <path d="${line}" fill="none" stroke="${color}" stroke-width="2.2"/>
+      ${dots}
+      <line x1="${plotL}" y1="${plotT}" x2="${plotL}" y2="${plotB}" stroke="#142119" stroke-opacity="0.55"/>
+      <line x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}" stroke="#142119" stroke-opacity="0.55"/>
+      ${xLabels}
+      <text x="15" y="${((plotT + plotB) / 2).toFixed(1)}" text-anchor="middle" font-size="12" fill="#142119" transform="rotate(-90 15 ${((plotT + plotB) / 2).toFixed(1)})">Оценка</text>
+      <text x="${((plotL + plotR) / 2).toFixed(1)}" y="${h - 10}" text-anchor="middle" font-size="12" fill="#142119">Дата</text>
+    </svg>
+    <figcaption class="chart-caption">${escapeHtml(caption)}</figcaption>
+  </figure>`;
 }
 
 function donut(el, parts) {
@@ -327,6 +423,10 @@ function donut(el, parts) {
     { k: "neutral", c: "#c9a44a", cls: "neu", l: "нейтральная" },
     { k: "negative", c: "#9c3b32", cls: "neg", l: "негативная" },
   ];
+  if (!map.some((item) => parts[item.k])) {
+    el.innerHTML = `<p class="muted">Нет оценённых звонков, тональность пока не из чего собрать.</p>`;
+    return;
+  }
   const total = map.reduce((s, x) => s + (parts[x.k] || 0), 0) || 1;
   let acc = 0;
   const r = 42, c = 2 * Math.PI * r;
@@ -382,18 +482,26 @@ async function renderDashboard(view) {
         <li>Оценка: вежливость, полнота ответа, скрипт, решение проблемы и рекомендации оператору</li>
         <li>Форматы WAV, MP3 и OGG. Загрузка, карточка звонка, дашборд и экспорт отчётов</li>
         <li>KPI в CSV и JSON: процент нарушений, время ответа, тональность, дата и время, идентификатор оператора</li>
-        <li>Звонок до 10 минут обрабатывается за 3–5 минут. Сейчас в работе ${data.queue.processing}, ждут ${data.queue.queued}</li>
+        <li>Профиль обработки звонка до 10 минут — 3–5 минут. Это расчёт, не замер на этой машине. Сейчас в работе ${data.queue.processing}, ждут ${data.queue.queued}</li>
       </ul>
     </div>`}
     <div class="grid kpis mt">
       <div class="card kpi"><div class="label">Нарушения</div><div class="value ${scoreClass(100 - k.violation_pct)}">${k.violation_pct.toFixed(0)}%</div><div class="hint">доля непройденных проверок</div></div>
       <div class="card kpi"><div class="label">Время ответа</div><div class="value">${k.avg_response_sec == null ? "—" : k.avg_response_sec.toFixed(1)}</div><div class="hint">секунды после реплики клиента</div></div>
-      <div class="card kpi"><div class="label">Обработка</div><div class="value">${sla}</div><div class="hint">норматив: 3–5 мин на 10 мин аудио</div></div>
+      <div class="card kpi"><div class="label">Обработка</div><div class="value">${sla}</div><div class="hint">среднее время одной записи</div></div>
       <div class="card kpi"><div class="label">Оценено</div><div class="value">${k.calls_done}</div><div class="hint">из ${k.calls_total} записей в периоде</div></div>
     </div>
     <div class="grid two mt">
-      <div class="card"><h2>Тренд качества</h2><div id="trend"></div></div>
-      <div class="card"><h2>Тональность</h2><div id="donut"></div></div>
+      <div class="card">
+        <h2>Тренд качества</h2>
+        <p class="chart-lead">Каждая точка — средний балл качества за один день.</p>
+        <div id="trend"></div>
+      </div>
+      <div class="card">
+        <h2>Тональность</h2>
+        <p class="chart-lead">Сколько разговоров прозвучали позитивно, нейтрально и негативно.</p>
+        <div id="donut"></div>
+      </div>
     </div>
     <div class="grid two mt">
       <div class="card">
@@ -462,10 +570,10 @@ async function renderCalls(view) {
           <option value="error">ошибка</option>
         </select>
       </label>
-      <label>Оператор
+      ${state.user?.role === "operator" ? "" : `<label>Оператор
         <select id="f-op"><option value="">все</option>${ops.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("")}</select>
-      </label>
-      <label>Поиск <input id="f-q" placeholder="файл или фраза из расшифровки" /></label>
+      </label>`}
+      <label class="grow">Поиск <input id="f-q" placeholder="файл или фраза из расшифровки" /></label>
       <label class="flex-check"><input id="f-flag" type="checkbox" /> только с пометкой</label>
       <button class="btn" id="f-apply" type="button">Показать</button>
       ${state.user?.role === "admin" ? `<button class="btn ghost" id="retry-failed" type="button">Повторить ошибки</button>` : ""}
@@ -475,7 +583,7 @@ async function renderCalls(view) {
       <div id="queue-list"></div>
       <p class="muted" id="queue-meta"></p>
     </div>
-    <div class="card mt" id="table-wrap"></div>
+    <div class="card mt table-scroll" id="table-wrap"></div>
     <div class="pager" id="pager"></div>`;
   const tokenId = {};
   state.callsToken = tokenId;
@@ -484,14 +592,14 @@ async function renderCalls(view) {
     try {
     const qs = new URLSearchParams({ page_size: "25", page: String(state.page) });
     if ($("#f-status").value) qs.set("status", $("#f-status").value);
-    if ($("#f-op").value) qs.set("operator_id", $("#f-op").value);
+    if ($("#f-op") && $("#f-op").value) qs.set("operator_id", $("#f-op").value);
     if ($("#f-q").value.trim()) qs.set("q", $("#f-q").value.trim());
     if ($("#f-flag").checked) qs.set("flagged", "true");
     const [data, queue] = await Promise.all([api("/calls?" + qs.toString()), api("/queue")]);
     const box = $("#queue-box");
     const busy = queue.queued || (queue.processing || []).length;
     box.hidden = !busy;
-    $("#queue-list").innerHTML = (queue.processing || []).map((j) => `<div><a href="#/calls/${j.id}">${escapeHtml(j.filename)}</a><div class="progress"><span style="width:${j.progress}%"></span></div></div>`).join("");
+    $("#queue-list").innerHTML = (queue.processing || []).map((j) => `<div><a href="#/calls/${j.id}">${escapeHtml(j.filename)}</a>${meter(j.progress, "meter gold")}</div>`).join("");
     $("#queue-meta").textContent = `Ждут: ${queue.queued}. Ошибок: ${queue.failed}. Слотов: ${queue.max_parallel_jobs}.`;
     $("#table-wrap").innerHTML = callsTable(data.items);
     const pages = Math.max(1, Math.ceil((data.total || 0) / data.page_size));
@@ -512,7 +620,7 @@ async function renderCalls(view) {
   const apply = () => { state.page = 1; load(); };
   $("#f-apply").onclick = apply;
   $("#f-status").onchange = apply;
-  $("#f-op").onchange = apply;
+  if ($("#f-op")) $("#f-op").onchange = apply;
   $("#f-flag").onchange = apply;
   let timer = null;
   $("#f-q").oninput = () => { clearTimeout(timer); timer = setTimeout(apply, 350); };
@@ -530,10 +638,15 @@ async function renderCalls(view) {
 }
 
 function callsTable(items) {
-  if (!items.length) return `<p class="empty">Нет звонков по фильтру. Загрузите запись на вкладке «Загрузить».</p>`;
+  if (!items.length) {
+    const hint = state.user?.role === "operator"
+      ? "Нет звонков по этому фильтру."
+      : "Нет звонков по фильтру. Загрузите запись на вкладке «Загрузить».";
+    return `<p class="empty">${hint}</p>`;
+  }
   return `<table><thead><tr>
-    <th>Дата</th><th>Файл</th><th>Оператор</th><th>Длит.</th><th>Качество</th>
-    <th>Вежл.</th><th>Полнота</th><th>Скрипт</th><th>Решение</th><th>Нарушения</th><th>Тон</th><th>Статус</th>
+    <th>Дата</th><th>Файл</th><th>Оператор</th><th>Длительность</th><th>Качество</th>
+    <th>Вежливость</th><th>Полнота</th><th>Скрипт</th><th>Решение</th><th>Нарушения</th><th>Тональность</th><th>Статус</th>
   </tr></thead><tbody>
     ${items.map((c) => `<tr class="link" data-go="#/calls/${c.id}">
       <td>${fmtDate(c.call_at)}</td>
@@ -585,7 +698,7 @@ async function renderCall(view, id) {
         <p class="eyebrow">${statusRu(call.status)}</p>
         <h2>${escapeHtml(call.orig_filename)}</h2>
         <p class="muted" id="live-label"></p>
-        ${live ? `<div class="progress" id="live-bar"><span id="live-progress" style="width:${call.progress || 4}%"></span></div>` : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
+        ${live ? meter(call.progress || 4, "meter gold", 'id="live-progress"') : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
         <h3 class="player-title">Прослушивание</h3>
         <div id="player-box">${call.has_audio ? "<p class='muted'>Загрузка записи…</p>" : call.is_demo ? "<p class='muted'>У демо-звонка пока нет записи. Озвучка включается настройкой DEMO_VOICE_ENABLED (docs/RUN.md), тогда плеер появится сам.</p>" : "<p class='muted'>У этого звонка ещё нет аудиофайла.</p>"}</div>
         ${q ? `<p class="lead">${escapeHtml(q.summary)}</p>` : call.error_message ? `<p class="form-error">${escapeHtml(call.error_message)}</p>` : `<p class="muted">Оценка появится после обработки.</p>`}
@@ -787,7 +900,7 @@ async function renderCall(view, id) {
           return;
         }
         const bar = $("#live-progress");
-        if (bar) bar.style.width = `${next.progress || 0}%`;
+        if (bar) bar.value = next.progress || 0;
         const label = $("#live-label");
         if (label) label.textContent = dossierLine(next);
       } catch {
@@ -798,13 +911,13 @@ async function renderCall(view, id) {
 }
 
 async function renderUpload(view) {
-  setNav("upload", "Загрузить записи", "WAV, MP3, OGG — локальная очередь, без передачи вовне", "Контур");
+  setNav("upload", "Загрузить записи", "WAV, MP3, OGG, FLAC и M4A — локальная очередь, без передачи вовне", "Контур");
   const [ops, s] = await Promise.all([api("/operators"), api("/settings")]);
   view.innerHTML = `
     <div class="grid two">
       <div class="card featured">
         <div class="drop" id="drop"><b>Перетащите записи сюда</b>
-          <span class="muted">или нажмите, чтобы выбрать · WAV · MP3 · OGG · до ${s.max_upload_mb} МБ</span>
+          <span class="muted">или нажмите, чтобы выбрать · WAV · MP3 · OGG · FLAC · M4A · до ${s.max_upload_mb} МБ</span>
           <input id="files" type="file" accept=".wav,.mp3,.ogg,.oga,.flac,.m4a,audio/*" multiple hidden />
         </div>
         <form id="up" class="stack">
@@ -830,7 +943,7 @@ async function renderUpload(view) {
           <p>Whisper расшифровывает речь локально. Движок считает вежливость, полноту, скрипт и решение.</p>
           <p>Метрики появляются на дашборде. Во внешние сети ничего не уходит.</p>
         </div>
-        <p class="muted mt">Модель ${s.local_offline ? "уже на диске, режим офлайн" : "скачается при первой обработке"} · лимит ${Math.round(s.max_duration_sec / 60)} мин. Запись на 10 минут укладывается в норматив 3–5 минут: тишина отсекается, длинный файл идёт пакетом.</p>
+        <p class="muted mt">Модель ${s.local_offline ? "уже на диске, режим офлайн" : "скачается при первой обработке"} · лимит ${Math.round(s.max_duration_sec / 60)} мин. Тишина отсекается, длинный файл идёт пакетом. Профиль для звонка в 10 минут — 3–5 минут, это расчёт, не замер на этой машине.</p>
       </div>
     </div>`;
   const drop = $("#drop");
@@ -960,6 +1073,16 @@ async function renderExport(view) {
   if (fullExport) fullExport.onclick = () => download("/export/json?full=true&" + qs());
 }
 
+function datasetStatusRu(status) {
+  return {
+    idle: "ожидание",
+    ready: "готово",
+    downloading: "скачивание",
+    evaluating: "проверка Whisper",
+    error: "ошибка",
+  }[status] || status || "ожидание";
+}
+
 async function renderDataset(view) {
   setNav("dataset", "Речевой датасет", "PolyAI MInDS-14 — банковские запросы с эталонной расшифровкой", "Проверка STT");
   const s = await api("/dataset");
@@ -970,7 +1093,7 @@ async function renderDataset(view) {
         <p class="eyebrow">Hugging Face · локальная копия</p>
         <h2>MInDS-14 · русский банк</h2>
         <p class="lead">Клипы и эталонный текст лежат в <code>data/datasets/</code>. После скачивания контур работает офлайн.</p>
-        <p>Статус: <b id="ds-status">${escapeHtml(s.status || "idle")}</b> · на диске: <b id="ds-n">${s.stored_clips || 0}</b></p>
+        <p>Статус: <b id="ds-status">${escapeHtml(datasetStatusRu(s.status))}</b> · на диске: <b id="ds-n">${s.stored_clips || 0}</b></p>
         <p class="muted" id="ds-msg">${escapeHtml(s.message || "")}</p>
         <p class="muted">Интенты: ${escapeHtml(intents)}</p>
         <div class="toolbar">
@@ -978,7 +1101,8 @@ async function renderDataset(view) {
           <button class="btn row" id="ds-eval" type="button" ${s.ready ? "" : "disabled"}>Проверить Whisper</button>
           <button class="btn row" id="ds-imp" type="button" ${s.ready ? "" : "disabled"}>Импорт в очередь</button>
         </div>
-        <div class="progress" id="ds-bar" ${s.progress ? "" : "hidden"}><span></span></div>
+        <p class="muted" id="ds-role-note" hidden></p>
+        ${meter(s.progress, "meter gold", `id="ds-bar"${s.progress ? "" : " hidden"}`)}
       </div>
       <div class="card">
         <h2>Зачем это</h2>
@@ -991,7 +1115,7 @@ async function renderDataset(view) {
       </div>
     </div>`;
   const bar = $("#ds-bar");
-  if (s.progress) bar.firstElementChild.style.width = s.progress + "%";
+  if (s.progress) bar.value = s.progress;
   const poll = async () => {
     let now;
     try {
@@ -1000,12 +1124,12 @@ async function renderDataset(view) {
       return;
     }
     if (!$("#ds-status")) return;
-    $("#ds-status").textContent = now.status || "idle";
+    $("#ds-status").textContent = datasetStatusRu(now.status);
     $("#ds-n").textContent = now.stored_clips || 0;
     $("#ds-msg").textContent = now.message || "";
     if (now.progress) {
       bar.hidden = false;
-      bar.firstElementChild.style.width = now.progress + "%";
+      bar.value = now.progress;
     }
     const busy = now.status === "downloading" || now.status === "evaluating";
     $("#ds-dl").disabled = busy;
@@ -1045,6 +1169,9 @@ async function renderDataset(view) {
   if (state.user?.role !== "admin") {
     $("#ds-dl").hidden = true;
     $("#ds-imp").hidden = true;
+    const note = $("#ds-role-note");
+    note.hidden = false;
+    note.textContent = "Скачивание и импорт в очередь доступны администратору. Проверку Whisper может запустить и аналитик.";
   }
   if (s.status === "downloading" || s.status === "evaluating") poll();
 }
@@ -1264,8 +1391,8 @@ async function renderAdmin(view) {
     </div>
     <div class="card mt">
       <div class="toolbar">
-        <h2 style="margin:0">Журнал аудита</h2>
-        <label>Фильтр <input id="audit-q" placeholder="логин, действие, IP" maxlength="80" /></label>
+        <h2 class="inline-title">Журнал аудита</h2>
+        <label class="grow">Фильтр <input id="audit-q" placeholder="логин, действие, IP" maxlength="80" /></label>
       </div>
       <table>
         <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th><th>IP</th></tr></thead>
@@ -1392,6 +1519,9 @@ $("#logout").addEventListener("click", async () => {
 
 $("#account").addEventListener("click", openAccount);
 $("#pwd-cancel").addEventListener("click", () => $("#account-dialog").close());
+$("#account-dialog").addEventListener("cancel", (event) => {
+  if (state.user?.must_change_password) event.preventDefault();
+});
 $("#pwd-self").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
