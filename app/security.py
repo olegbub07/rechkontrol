@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 from threading import Lock
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 
 from app.config import settings
 
@@ -25,6 +24,7 @@ CSP = (
     "media-src 'self' blob:; "
     "style-src 'self'; "
     "script-src 'self'; "
+    "script-src-attr 'none'; "
     "connect-src 'self'; "
     "font-src 'self'; "
     "object-src 'none'; "
@@ -43,42 +43,161 @@ def request_body_limit(path: str) -> int:
     return 1024 * 1024
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
-        path = request.url.path
-        raw_length = request.headers.get("content-length")
+_MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_SECURITY_HEADERS = (
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"permissions-policy", b"camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
+    (b"content-security-policy", CSP.encode("ascii")),
+    (b"x-permitted-cross-domain-policies", b"none"),
+    (b"x-robots-tag", b"noindex, nofollow"),
+    (b"server", b"RechKontrol"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+    (b"cross-origin-resource-policy", b"same-origin"),
+    (b"x-dns-prefetch-control", b"off"),
+)
+
+
+def _header_map(scope) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for key, value in scope.get("headers") or []:
+        found[key.decode("latin1").lower()] = value.decode("latin1")
+    return found
+
+
+def origin_matches_host(origin: str, host: str) -> bool:
+    """Origin браузера должен совпадать с Host. Иначе это запрос с другого сайта."""
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not host:
+        return False
+    return parsed.netloc.lower() == host.lower()
+
+
+class SecurityHeadersMiddleware:
+    """Заголовки, лимит тела и отказ чужому Origin. Чистый ASGI: лимит действует и без Content-Length."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or "/"
+        method = (scope.get("method") or "GET").upper()
+        headers = _header_map(scope)
+        if method in _MUTATING:
+            origin = headers.get("origin")
+            if origin and not origin_matches_host(origin, headers.get("host", "")):
+                await _json_response(send, 403, "Запрос с другого сайта отклонён", path)
+                return
+            if headers.get("sec-fetch-site") == "cross-site":
+                await _json_response(send, 403, "Запрос с другого сайта отклонён", path)
+                return
+        limit = request_body_limit(path)
+        raw_length = headers.get("content-length")
         if raw_length is not None:
             try:
                 size = int(raw_length)
             except ValueError:
-                from starlette.responses import JSONResponse
-
-                return JSONResponse({"detail": "Некорректный размер запроса"}, status_code=400)
-            if size > request_body_limit(path):
-                from starlette.responses import JSONResponse
-
-                return JSONResponse({"detail": "Запрос слишком большой"}, status_code=413)
-        if path.startswith("/api/") and path not in {"/api/health"}:
-            key = client_key(request)
+                await _json_response(send, 400, "Некорректный размер запроса", path)
+                return
+            if size > limit:
+                await _json_response(send, 413, "Запрос слишком большой", path)
+                return
+        if path.startswith("/api/") and path != "/api/health":
+            key = _peer_ip(scope.get("client"), headers)
             api_gate.fail(key)
             if api_gate.blocked(key):
-                from starlette.responses import JSONResponse
+                await _json_response(send, 429, "Слишком много запросов. Подождите минуту.", path)
+                return
+        incoming = receive
+        if raw_length is None and method not in {"GET", "HEAD", "OPTIONS"}:
+            if path.startswith("/api/calls/upload"):
+                incoming = _capped_receive(receive, limit)
+            else:
+                body, too_big = await _buffer_body(receive, limit)
+                if too_big:
+                    await _json_response(send, 413, "Запрос слишком большой", path)
+                    return
+                incoming = _replay(body)
+        await self.app(scope, incoming, _secured_send(send, path))
 
-                return JSONResponse({"detail": "Слишком много запросов. Подождите минуту."}, status_code=429)
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = CSP
-        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
-        response.headers["X-Robots-Tag"] = "noindex, nofollow"
-        response.headers["Server"] = "RechKontrol"
-        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
-        if path.startswith("/api") or path.startswith("/static") or path == "/":
-            response.headers["Cache-Control"] = "no-store"
-        return response
+
+def _secured_send(send, path: str):
+    async def wrapped(message):
+        if message["type"] == "http.response.start":
+            raw = [(key, value) for key, value in (message.get("headers") or [])]
+            names = {key.lower() for key, _ in raw}
+            for key, value in _SECURITY_HEADERS:
+                if key not in names:
+                    raw.append((key, value))
+            if path.startswith("/api") or path.startswith("/static") or path == "/":
+                raw = [(key, value) for key, value in raw if key.lower() != b"cache-control"]
+                raw.append((b"cache-control", b"no-store"))
+            message = {**message, "headers": raw}
+        await send(message)
+
+    return wrapped
+
+
+async def _json_response(send, status: int, detail: str, path: str) -> None:
+    payload = json.dumps({"detail": detail}, ensure_ascii=False).encode("utf-8")
+    headers = list(_SECURITY_HEADERS) + [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(payload)).encode("ascii")),
+    ]
+    if path.startswith("/api") or path == "/":
+        headers.append((b"cache-control", b"no-store"))
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": payload})
+
+
+async def _buffer_body(receive, limit: int) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return b"".join(chunks), False
+        if message["type"] != "http.request":
+            continue
+        piece = message.get("body") or b""
+        total += len(piece)
+        if total > limit:
+            return b"", True
+        chunks.append(piece)
+        if not message.get("more_body", False):
+            return b"".join(chunks), False
+
+
+def _replay(body: bytes):
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return receive
+
+
+def _capped_receive(receive, limit: int):
+    total = 0
+
+    async def wrapped():
+        nonlocal total
+        message = await receive()
+        if message["type"] == "http.request":
+            total += len(message.get("body") or b"")
+            if total > limit:
+                return {"type": "http.disconnect"}
+        return message
+
+    return wrapped
 
 
 class LoginGate:
@@ -122,6 +241,7 @@ class LoginGate:
 
 login_gate = LoginGate()
 api_gate = LoginGate(max_attempts=480, window_sec=60)
+password_gate = LoginGate(max_attempts=8, window_sec=900)
 
 
 def _trusted_proxies() -> frozenset[str]:
@@ -129,22 +249,27 @@ def _trusted_proxies() -> frozenset[str]:
     return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
-def client_ip(request: Request) -> str:
+def _peer_ip(client, headers: dict[str, str]) -> str:
     """Адрес клиента. X-Forwarded-For учитывается только от прокси из TRUSTED_PROXIES.
 
     Берётся самый правый адрес цепочки, который не является доверенным прокси:
     левые элементы заголовка клиент может подделать.
     """
-    peer = request.client.host if request.client else "local"
+    peer = client[0] if client else "local"
     proxies = _trusted_proxies()
     if not proxies or peer not in proxies:
         return peer
-    header = request.headers.get("x-forwarded-for", "")
-    chain = [item.strip() for item in header.split(",") if item.strip()]
+    chain = [item.strip() for item in headers.get("x-forwarded-for", "").split(",") if item.strip()]
     for hop in reversed(chain):
         if hop not in proxies:
             return hop[:64]
     return peer
+
+
+def client_ip(request: Request) -> str:
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    client = (request.client.host, request.client.port) if request.client else None
+    return _peer_ip(client, headers)
 
 
 def client_key(request: Request) -> str:

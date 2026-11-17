@@ -147,6 +147,46 @@ def note_login_failure(key: str, username: str, request: Request | None = None) 
         log.exception("login failure persist failed")
 
 
+def password_change_blocked(user_id: int) -> bool:
+    from app.security import password_gate
+
+    return password_gate.blocked(f"pwd:{int(user_id)}")
+
+
+def note_password_failure(user_id: int, request: Request | None = None) -> None:
+    from app.audit import write_audit
+    from app.models import SecurityMark
+    from app.security import password_gate
+
+    key = f"pwd:{int(user_id)}"
+    password_gate.fail(key)
+    now = int(time.time())
+    try:
+        lock, factory = _mark_session()
+        with lock, factory() as session:
+            session.query(SecurityMark).filter(SecurityMark.expires_at <= now).delete()
+            _add_mark(session, "password_fail", key, now, now + password_gate.window_sec)
+            write_audit(session, "password_fail", detail=key, request=request)
+            session.commit()
+    except Exception:
+        log.exception("password failure persist failed")
+
+
+def clear_password_failures(user_id: int) -> None:
+    from app.models import SecurityMark
+    from app.security import password_gate
+
+    key = f"pwd:{int(user_id)}"
+    password_gate.ok(key)
+    try:
+        lock, factory = _mark_session()
+        with lock, factory() as session:
+            session.query(SecurityMark).filter(SecurityMark.kind == "password_fail", SecurityMark.subject == key).delete()
+            session.commit()
+    except Exception:
+        log.exception("password failure clear failed")
+
+
 def clear_login_failures(key: str) -> None:
     from app.models import SecurityMark
     from app.security import login_gate
@@ -177,6 +217,10 @@ def restore_persisted_guards() -> None:
                 _revoked[row.subject] = int(row.expires_at)
         elif row.kind == "login_fail" and row.subject:
             login_gate.remember(row.subject, float(row.created_at))
+        elif row.kind == "password_fail" and row.subject:
+            from app.security import password_gate
+
+            password_gate.remember(row.subject, float(row.created_at))
 
 
 def needs_password_change(user: User) -> bool:

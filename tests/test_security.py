@@ -335,6 +335,106 @@ def test_oversized_json_is_rejected():
     assert response.status_code == 413
 
 
+def test_chunked_body_without_length_is_rejected():
+    import asyncio
+
+    from app.main import app
+
+    chunks = [
+        {"type": "http.request", "body": b'{"password":"' + (b"x" * 700_000), "more_body": True},
+        {"type": "http.request", "body": (b"y" * 700_000) + b'"}', "more_body": False},
+    ]
+
+    async def receive():
+        if chunks:
+            return chunks.pop(0)
+        return {"type": "http.disconnect"}
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/auth/login",
+        "raw_path": b"/api/auth/login",
+        "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(app(scope, receive, send))
+    start = next(item for item in sent if item["type"] == "http.response.start")
+    assert start["status"] == 413
+
+
+def test_cross_site_post_is_rejected_and_password_is_not_echoed():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        foreign = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "whatever"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert foreign.status_code == 403
+        same = client.post(
+            "/api/auth/login",
+            json={"username": "nobody-cross", "password": "whatever"},
+            headers={"Origin": "http://testserver"},
+        )
+        assert same.status_code == 401
+        leaked = client.post("/api/auth/login", json={"username": "admin", "password": ["SecretValue99!"]})
+        assert leaked.status_code == 422
+        assert "SecretValue99!" not in leaked.text
+
+
+def test_disabled_login_looks_like_a_bad_password():
+    from fastapi.testclient import TestClient
+
+    from app.auth import hash_password
+    from app.db import SessionLocal
+    from app.main import app
+    from app.models import User
+
+    name = "qa.disabled"
+    with SessionLocal() as session:
+        old = session.query(User).filter(User.username == name).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.commit()
+        session.add(
+            User(
+                username=name,
+                password_hash=hash_password("Disabled-Pass-2026"),
+                role="analyst",
+                is_active=0,
+                token_version=1,
+            )
+        )
+        session.commit()
+    try:
+        with TestClient(app) as client:
+            unknown = client.post("/api/auth/login", json={"username": "nobody-missing", "password": "Disabled-Pass-2026"})
+            disabled = client.post("/api/auth/login", json={"username": name, "password": "Disabled-Pass-2026"})
+            assert unknown.status_code == 401
+            assert disabled.status_code == 401
+            assert unknown.json()["detail"] == disabled.json()["detail"]
+    finally:
+        with SessionLocal() as session:
+            row = session.query(User).filter(User.username == name).one_or_none()
+            if row is not None:
+                session.delete(row)
+                session.commit()
+
+
 def test_analyst_cannot_delete_script_or_full_export():
     from fastapi.testclient import TestClient
 

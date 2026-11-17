@@ -23,15 +23,22 @@ Authorization: Bearer <token>
 | POST | `/auth/login` | `{ "username", "password" }` | `{ token, user }` |
 | POST | `/auth/logout` | — | отзыв текущего токена |
 | GET | `/auth/me` | — | текущий пользователь, поле `must_change_password` |
+| POST | `/auth/password` | `{ "old_password", "new_password" }` | новый токен; старые сессии закрыты |
 
-После 8 неудачных попыток с одного IP вход блокируется на 15 минут.
+После 8 неудачных попыток входа с одного IP вход блокируется на 15 минут. Отключённая учётка отвечает тем же текстом, что и неверный пароль. После 8 неверных старых паролей смена пароля блокируется на 15 минут.
+
+Пока `must_change_password` истинно, открыты только `/auth/me`, `/auth/password` и `/auth/logout`. Остальное — 403 «Смените стартовый пароль».
+
+Чужой `Origin` или `Sec-Fetch-Site: cross-site` на `POST`/`PUT`/`PATCH`/`DELETE` даёт 403. Тело обычного запроса больше 1 МБ — 413, даже если заголовок `Content-Length` не прислан. Ошибка полей — 422 «Проверьте поля запроса», без эха пароля.
+
+Роли: `operator` видит и слушает только звонки своей карточки (`operator_id` в `/auth/me`). Чужой звонок — 404. `analyst` читает все звонки. `admin` плюс удаление, полный экспорт, настройки скрипта, датасет и `/admin`.
 
 ## Звонки и очередь
 
 | Метод | Путь | Описание |
 |---|---|---|
 | GET | `/calls` | список: `status`, `operator_id`, `q` (файл и текст, до 120 символов), `flagged`, `page`, `page_size` |
-| GET | `/calls/{id}` | досье: сегменты, чек-лист, рекомендации, заметка |
+| GET | `/calls/{id}` | досье. `?unmasked=true` снимает маску ПДн, только администратор, событие `call.unmask` |
 | PATCH | `/calls/{id}` | `{ "review_note", "flagged" }` |
 | POST | `/calls/upload` | `multipart`: `files`, `operator_id`, `operator_name`, `call_at`, `operator_first` |
 | GET | `/calls/{id}/audio` | расшифрованный поток исходного файла, только звуковой MIME |
@@ -56,7 +63,7 @@ Authorization: Bearer <token>
 |---|---|---|
 | GET | `/dashboard?period=7d\|30d\|all` | KPI, тренд, тональность, операторы, список `attention` |
 | GET | `/export/csv` | фильтры `operator_id`, `date_from`, `date_to` |
-| GET | `/export/json` | те же фильтры; `full=true` — с расшифровками |
+| GET | `/export/json` | те же фильтры; `full=true` — с расшифровками (только admin); `unmasked=true` вместе с `full` снимает маску и пишется в журнал |
 
 Выгрузка отдаёт не больше 5000 строк.
 

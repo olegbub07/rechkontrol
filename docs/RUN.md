@@ -44,6 +44,8 @@ WinError 10048 — это занятый порт, не ошибка кода.
 | `MAX_UPLOAD_MB` | размер файла | `80` |
 | `MAX_DURATION_SEC` | лимит длины | `900` (15 мин) |
 | `ALLOW_REMOTE` | слушать не только localhost | `false` |
+| `PII_MASKING` | маска персональных данных в выдаче | `true` |
+| `JWT_TTL_HOURS` | срок токена | `12` |
 | `WHISPER_BEAM_SIZE` | луч декодера, 1–5 | `5` |
 | `WHISPER_BATCH_SIZE` | пакет для записей от 90 с | `8` |
 | `WHISPER_CPU_THREADS` | потоки CPU, `0` — само | `0` |

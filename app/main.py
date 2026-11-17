@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -54,7 +54,7 @@ async def lifespan(_app: FastAPI):
     restore_persisted_guards()
     start_workers()
     start_demo_voices()
-    log.info("Вход администратора и оператора показан на экране входа, пока пароли не сменены.")
+    log.info("Стартовые пароли, если они выданы, записаны в data/initial_credentials.txt и в эту консоль.")
     if local_model_ready():
         threading.Thread(target=_warm_model, name="whisper-warm", daemon=True).start()
     log.info("РечьКонтроль listening on http://%s:%s", settings.app_host, settings.app_port)
@@ -79,10 +79,14 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts())
 app.include_router(api_router, prefix="/api")
 
 
+@app.exception_handler(RequestValidationError)
+async def hide_validation_input(_request: Request, _exc: RequestValidationError):
+    """Не возвращаем присланные поля: в них может быть пароль."""
+    return JSONResponse(status_code=422, content={"detail": "Проверьте поля запроса"})
+
+
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception):
-    if isinstance(exc, RequestValidationError):
-        return await request_validation_exception_handler(request, exc)
     if isinstance(exc, StarletteHTTPException):
         return await http_exception_handler(request, exc)
     log.exception("unhandled error: %s", exc.__class__.__name__)

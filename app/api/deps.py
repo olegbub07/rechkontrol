@@ -42,10 +42,8 @@ def current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Некорректный токен")
     username = payload.get("sub")
     user = session.query(User).filter(User.username == username).one_or_none()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
-    if user.is_active == 0:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Учётная запись отключена")
+    if user is None or user.is_active == 0:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия истекла, войдите снова")
     if int(payload.get("ver") or 0) != int(user.token_version or 1):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия сброшена, войдите снова")
     if needs_password_change(user) and request.url.path not in _BOOTSTRAP_OPEN:

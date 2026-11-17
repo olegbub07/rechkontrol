@@ -17,6 +17,9 @@ from app.auth import (
     revoke_jti,
     forget_initial_credentials,
     needs_password_change,
+    clear_password_failures,
+    note_password_failure,
+    password_change_blocked,
     verify_password,
 )
 from app.models import User
@@ -51,7 +54,7 @@ def login(body: LoginIn, request: Request, session: Session = Depends(db_session
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
     if user.is_active == 0:
         note_login_failure(key, body.username.strip(), request)
-        raise HTTPException(status_code=401, detail="Учётная запись отключена")
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
     clear_login_failures(key)
     user.last_login_at = utcnow()
     write_audit(session, "login", user=user, request=request)
@@ -85,8 +88,14 @@ def change_password(
     user: User = Depends(current_user),
 ) -> TokenOut:
     db_user = session.get(User, user.id)
-    if db_user is None or not verify_password(body.old_password, db_user.password_hash):
+    if db_user is None:
+        raise HTTPException(status_code=401, detail="Сессия истекла, войдите снова")
+    if password_change_blocked(db_user.id):
+        raise HTTPException(status_code=429, detail="Слишком много попыток смены пароля. Подождите несколько минут.")
+    if not verify_password(body.old_password, db_user.password_hash):
+        note_password_failure(db_user.id, request)
         raise HTTPException(status_code=400, detail="Старый пароль неверен")
+    clear_password_failures(db_user.id)
     try:
         validate_password(body.new_password, db_user.username)
     except PasswordError as exc:
