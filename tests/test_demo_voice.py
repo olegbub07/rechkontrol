@@ -32,3 +32,30 @@ def test_voice_model_hash_is_enforced(tmp_path, monkeypatch):
     monkeypatch.setattr("app.demo_voice.settings.demo_voice_model_sha256", "")
     with pytest.raises(RuntimeError):
         demo_voice.verify_model(fake)
+
+
+def test_demo_dialogue_is_stereo_operator_left():
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    from app import demo_voice
+
+    class FakeModel:
+        def apply_tts(self, text, speaker, sample_rate, **_):
+            t = np.arange(int(sample_rate * 0.5)) / sample_rate
+            return (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+
+    segments = [
+        {"role": "operator", "text": "Добрый день, банк Центр-инвест."},
+        {"role": "client", "text": "Здравствуйте, у меня вопрос."},
+    ]
+    payload, timed, duration = demo_voice.render_dialogue(FakeModel(), segments)
+    audio, sr = sf.read(io.BytesIO(payload), dtype="float32")
+    assert audio.ndim == 2 and audio.shape[1] == 2
+    first = audio[int(timed[0]["start"] * sr) : int(timed[0]["end"] * sr)]
+    second = audio[int(timed[1]["start"] * sr) : int(timed[1]["end"] * sr)]
+    assert np.abs(first[:, 0]).mean() > 0.1 and np.abs(first[:, 1]).max() == 0
+    assert np.abs(second[:, 1]).mean() > 0.1 and np.abs(second[:, 0]).max() == 0
+    assert timed[1]["start"] - timed[0]["end"] >= 0.55

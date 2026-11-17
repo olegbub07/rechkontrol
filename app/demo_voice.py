@@ -123,34 +123,47 @@ def _speak(model, text: str, speaker: str) -> np.ndarray:
 
 
 def render_dialogue(model, segments: list[dict]) -> tuple[bytes, list[dict], float]:
-    gap = np.zeros(int(0.32 * OUT_RATE), dtype=np.float32)
-    pieces: list[np.ndarray] = []
+    """Стерео-запись, как в колл-центре: оператор в левом канале, клиент в правом.
+
+    Раньше демо было моно с паузой 0,32 с между репликами. Разметка ролей по паузам
+    в моно ищет тишину от 0,55 с, поэтому после переобработки весь демо-звонок
+    склеивался в одну реплику оператора. В стерео роли берутся из каналов,
+    а пауза 0,6 с помогает и при сведении в моно.
+    """
+    gap_len = int(0.6 * OUT_RATE)
+    left: list[np.ndarray] = []
+    right: list[np.ndarray] = []
     timed: list[dict] = []
     cursor = 0
     for segment in segments:
         if not isinstance(segment, dict):
             continue
-        speaker = "xenia" if segment.get("role") == "operator" else "eugene"
+        is_operator = segment.get("role") == "operator"
+        speaker = "xenia" if is_operator else "eugene"
         spoken = _speak(model, str(segment.get("text") or ""), speaker)
+        silent = np.zeros(len(spoken), dtype=np.float32)
+        left.append(spoken if is_operator else silent)
+        right.append(silent if is_operator else spoken)
         start = cursor / OUT_RATE
         cursor += len(spoken)
         end = cursor / OUT_RATE
-        pieces.append(spoken)
-        pieces.append(gap)
-        cursor += len(gap)
+        gap = np.zeros(gap_len, dtype=np.float32)
+        left.append(gap)
+        right.append(gap)
+        cursor += gap_len
         row = dict(segment)
         row["start"] = round(start, 2)
         row["end"] = round(end, 2)
         timed.append(row)
-    if not pieces:
-        silence = np.zeros(OUT_RATE, dtype=np.float32)
-        pieces = [silence]
-    mixed = np.concatenate(pieces)
-    peak = float(np.max(np.abs(mixed))) or 1.0
-    mixed = (mixed / peak * 0.9).astype(np.float32)
+    if not left:
+        left = [np.zeros(OUT_RATE, dtype=np.float32)]
+        right = [np.zeros(OUT_RATE, dtype=np.float32)]
+    stereo = np.stack([np.concatenate(left), np.concatenate(right)], axis=1)
+    peak = float(np.max(np.abs(stereo))) or 1.0
+    stereo = (stereo / peak * 0.9).astype(np.float32)
     buf = io.BytesIO()
-    sf.write(buf, mixed, OUT_RATE, format="WAV", subtype="PCM_16")
-    return buf.getvalue(), timed, round(len(mixed) / OUT_RATE, 2)
+    sf.write(buf, stereo, OUT_RATE, format="WAV", subtype="PCM_16")
+    return buf.getvalue(), timed, round(len(stereo) / OUT_RATE, 2)
 
 
 def build_demo_voices() -> None:
