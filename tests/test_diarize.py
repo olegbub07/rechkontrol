@@ -139,3 +139,49 @@ def test_read_stereo_16k_detects_channels(tmp_path):
     assert out is not None and out.shape[1] == 2 and abs(len(out) - 32000) < 400
     assert float(np.abs(out[:16000, 0]).mean()) > float(np.abs(out[:16000, 1]).mean())
     assert read_stereo_16k(mono_path) is None
+
+
+def _voice(f0: float, tilt: float, seconds: float, sr: int, rng) -> "np.ndarray":
+    import numpy as np
+
+    t = np.arange(int(seconds * sr)) / sr
+    vib = 1 + 0.03 * np.sin(2 * np.pi * 5 * t)
+    x = sum((1.0 / k**tilt) * np.sin(2 * np.pi * f0 * k * np.cumsum(vib) / sr) for k in range(1, 16))
+    return (0.1 * x / np.abs(x).max() + 0.002 * rng.standard_normal(len(t))).astype("float32")
+
+
+def _dialog(voices):
+    import numpy as np
+
+    sr, rng = 16000, np.random.default_rng(1)
+    audio, words, pos = [], [], 0.0
+    lines = ["Добрый день, компания слушаю вас.", "Здравствуйте, хочу узнать время.", "Подскажите, пожалуйста, номер?",
+             "Да.", "Спасибо, сейчас проверю.", "Хорошо, жду ответа.", "Всего доброго.", "До свидания, спасибо."]
+    for i, text in enumerate(lines):
+        f0, tilt = voices[i % len(voices)]
+        dur = 0.4 * len(text.split()) + 0.3
+        audio.append(_voice(f0, tilt, dur, sr, rng))
+        audio.append(np.zeros(int(0.3 * sr), dtype="float32"))
+        toks = text.split()
+        step = dur / len(toks)
+        for j, tok in enumerate(toks):
+            words.append({"start": pos + j * step, "end": pos + (j + 1) * step - 0.02, "text": tok})
+        pos += dur + 0.3
+    return [{"start": 0.0, "end": pos, "text": " ".join(lines), "words": words}], np.concatenate(audio), sr
+
+
+def test_voice_split_alternates_speakers_even_without_pauses():
+    from app.diarize import from_whisper
+
+    raw, audio, sr = _dialog([(230.0, 1.0), (110.0, 2.2)])
+    turns = from_whisper(raw, operator_first=True, audio=audio, sr=sr)
+    assert [t["role"] for t in turns] == ["operator", "client"] * 4
+    assert turns[0]["text"].startswith("Добрый день") and turns[3]["text"] == "Да."
+    assert all(t.get("source") == "voice" for t in turns)
+
+
+def test_voice_split_skips_single_voice():
+    from app.diarize import voice_turns
+
+    raw, audio, sr = _dialog([(180.0, 1.5)])
+    assert voice_turns(raw[0]["words"], audio, sr) is None

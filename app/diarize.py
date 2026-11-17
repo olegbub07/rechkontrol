@@ -41,6 +41,17 @@ OPERATOR_CUES = (
     "заявку зарегистрирую",
     "счёт откроем",
     "счет откроем",
+    "горячая линия",
+    "горячие линии",
+    "компания",
+    "компании",
+    "слушаю вас",
+    "как могу к вам обращаться",
+    "как к вам обращаться",
+    "спасибо за звонок",
+    "спасибо вам за ваш звонок",
+    "чем еще могу помочь",
+    "могу чем-то еще помочь",
 )
 
 CLIENT_CUES = (
@@ -359,6 +370,154 @@ def roles_from_channels(
     return merge_same_role(out, max_gap=1.0)
 
 
+# ---------- Разделение по голосу (моно) ----------
+# Текстовые подсказки и паузы не видят смену говорящего, если клиент
+# отвечает сразу. Поэтому режем слова на короткие фразы, считаем по каждой
+# простой «отпечаток голоса и линии» (MFCC: средние и разброс) и делим фразы
+# на два кластера. Только numpy, без тяжёлых моделей.
+
+VOICE_MIN_UNITS = 4
+VOICE_MIN_SHARE = 0.12  # меньший кластер должен занимать хотя бы столько речи
+VOICE_MIN_BIC = 8.0  # насколько два голоса объясняют фразы лучше одного (ΔBIC в 3 главных компонентах)
+_SENT_END = re.compile(r"[.?!…]$")
+
+
+def _phrase_units(words: list[dict], gap: float = 0.25) -> list[list[dict]]:
+    units: list[list[dict]] = [[words[0]]]
+    for prev, word in zip(words, words[1:]):
+        if word["start"] - prev["end"] >= gap or _SENT_END.search(prev["text"]):
+            units.append([word])
+        else:
+            units[-1].append(word)
+    return units
+
+
+_FB_CACHE: dict = {}
+
+
+def _mel_dct(sr: int, n_fft: int = 512, n_mel: int = 26, n_ceps: int = 13):
+    key = (sr, n_fft)
+    if key not in _FB_CACHE:
+        mel = lambda f: 2595 * np.log10(1 + f / 700.0)  # noqa: E731
+        imel = lambda m: 700 * (10 ** (m / 2595.0) - 1)  # noqa: E731
+        pts = imel(np.linspace(mel(60), mel(min(4000, sr / 2)), n_mel + 2))
+        bins = np.floor((n_fft + 1) * pts / sr).astype(int)
+        fb = np.zeros((n_mel, n_fft // 2 + 1))
+        for i in range(n_mel):
+            lo, c, hi = bins[i : i + 3]
+            fb[i, lo:c] = (np.arange(lo, c) - lo) / max(c - lo, 1)
+            fb[i, c:hi] = (hi - np.arange(c, hi)) / max(hi - c, 1)
+        dct = np.cos(np.pi / n_mel * (np.arange(n_mel)[None, :] + 0.5) * np.arange(1, n_ceps + 1)[:, None])
+        _FB_CACHE[key] = (fb, dct)
+    return _FB_CACHE[key]
+
+
+def voice_features(audio: np.ndarray, sr: int, start: float, end: float) -> np.ndarray | None:
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    x = np.asarray(audio[max(0, int(start * sr)) : int(end * sr)], dtype=np.float64)
+    win, hop, n_fft = int(0.025 * sr), int(0.01 * sr), 512
+    if len(x) < win * 4:
+        return None
+    x = np.append(x[0], x[1:] - 0.97 * x[:-1])
+    frames = np.lib.stride_tricks.sliding_window_view(x, win)[::hop] * np.hamming(win)
+    power = np.abs(np.fft.rfft(frames, n_fft)) ** 2
+    energy = power.sum(axis=1)
+    keep = energy > np.percentile(energy, 40)
+    if keep.sum() < 3:
+        return None
+    fb, dct = _mel_dct(sr, n_fft)
+    ceps = np.log(power[keep] @ fb.T + 1e-10) @ dct.T
+    return np.concatenate([ceps.mean(axis=0), ceps.std(axis=0)])
+
+
+def _two_means(x: np.ndarray) -> tuple[np.ndarray, float]:
+    xs = (x - x.mean(axis=0)) / (x.std(axis=0) + 1e-9)
+    _, _, vt = np.linalg.svd(xs, full_matrices=False)
+    proj = xs @ vt[0]
+    labels = (proj > np.median(proj)).astype(int)
+    for _ in range(25):
+        if labels.min() == labels.max():
+            break
+        centers = np.array([xs[labels == k].mean(axis=0) for k in (0, 1)])
+        new = np.argmin(((xs[:, None, :] - centers[None]) ** 2).sum(axis=2), axis=1)
+        if np.array_equal(new, labels):
+            break
+        labels = new
+    if labels.min() == labels.max() or min(np.bincount(labels)) < 2:
+        return labels, 0.0
+    k = min(3, xs.shape[1])
+    z = xs @ vt[:k].T
+
+    def loglik(y: np.ndarray) -> float:
+        return -0.5 * len(y) * float(np.sum(np.log(y.var(axis=0) + 1e-6)))
+
+    gain = loglik(z[labels == 0]) + loglik(z[labels == 1]) - loglik(z) - 0.5 * (2 * k + 1) * np.log(len(z))
+    return labels, float(gain)
+
+
+_SHORT_ANSWERS = {"да", "нет", "угу", "ага", "хорошо", "конечно", "верно", "правильно", "да да", "нет нет", "ага ага"}
+
+
+def _is_short_answer(text: str) -> bool:
+    return re.sub(r"[^\w ]+", "", normalize(text)).strip() in _SHORT_ANSWERS
+
+
+def voice_turns(words: list[dict], audio: np.ndarray, sr: int, operator_first: bool = True) -> list[dict] | None:
+    """Роли по голосу. None, если голоса не делятся уверенно (тогда старая разметка)."""
+    if not words or audio is None or not sr:
+        return None
+    units = _phrase_units(words)
+    feats = [voice_features(audio, sr, u[0]["start"], u[-1]["end"]) for u in units]
+    idx = [i for i, f in enumerate(feats) if f is not None]
+    if len(idx) < VOICE_MIN_UNITS:
+        return None
+    labels, separation = _two_means(np.array([feats[i] for i in idx]))
+    dur = {k: sum(units[i][-1]["end"] - units[i][0]["start"] for i, lab in zip(idx, labels) if lab == k) for k in (0, 1)}
+    total = dur[0] + dur[1]
+    if separation < VOICE_MIN_BIC or total <= 0 or min(dur.values()) / total < VOICE_MIN_SHARE:
+        return None
+    label_of: dict[int, int] = dict(zip(idx, (int(x) for x in labels)))
+    prev = None
+    unit_labels: list[int] = []
+    for i in range(len(units)):
+        lab = label_of.get(i, prev)
+        if lab is None:
+            lab = next((label_of[j] for j in idx if j > i), 0)
+        unit_labels.append(lab)
+        prev = lab
+    # Короткое «да»/«нет» сразу после вопроса почти всегда говорит другой человек,
+    # а голос по полсекунды звука определяется ненадёжно.
+    for i in range(1, len(units)):
+        prev_text = (units[i - 1][-1].get("text") or "").strip()
+        if prev_text.endswith("?") and _is_short_answer(_join_words(units[i])):
+            unit_labels[i] = 1 - unit_labels[i - 1]
+    texts = {0: [], 1: []}
+    for u, lab in zip(units, unit_labels):
+        texts[lab].append(_join_words(u))
+    score = {
+        k: _cue_score(" ".join(texts[k]), OPERATOR_CUES) - _cue_score(" ".join(texts[k]), CLIENT_CUES) for k in (0, 1)
+    }
+    if score[0] != score[1]:
+        op = 0 if score[0] > score[1] else 1
+    else:
+        op = unit_labels[0] if operator_first else 1 - unit_labels[0]
+    out: list[dict] = []
+    for u, lab in zip(units, unit_labels):
+        role = "operator" if lab == op else "client"
+        out.append(
+            {
+                "start": float(u[0]["start"]),
+                "end": float(u[-1]["end"]),
+                "text": _join_words(u),
+                "role": role,
+                "speaker": "A" if role == "operator" else "B",
+                "source": "voice",
+            }
+        )
+    return merge_same_role([t for t in out if t["text"]], max_gap=3.5)
+
+
 def from_whisper(
     raw_segments: list[dict],
     operator_first: bool = True,
@@ -394,6 +553,10 @@ def from_whisper(
         result = roles_from_channels(by_channel, stereo, stereo_sr, operator_first, operator_channel)
         if result:
             return result
+    if words and audio is not None and sr:
+        voiced = voice_turns(words, audio, sr, operator_first=operator_first)
+        if voiced:
+            return voiced
     regions = speech_regions(audio, sr) if audio is not None and sr else None
     if words:
         turns = utterances_from_words(words, regions)
