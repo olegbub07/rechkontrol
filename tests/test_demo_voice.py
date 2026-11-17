@@ -20,6 +20,21 @@ def test_demo_voice_is_off_by_default_and_does_not_download(monkeypatch):
     assert started == []
 
 
+def test_voice_download_allows_only_silero_host(tmp_path, monkeypatch):
+    from app import demo_voice
+
+    path = tmp_path / "v4_ru.pt"
+    for url in (
+        "https://evil.example/v4_ru.pt",
+        "http://models.silero.ai/models/tts/ru/v4_ru.pt",
+        "https://user:secret@models.silero.ai/models/tts/ru/v4_ru.pt",
+    ):
+        monkeypatch.setattr("app.demo_voice.settings.demo_voice_model_url", url)
+        with pytest.raises(RuntimeError, match="models.silero.ai"):
+            demo_voice._download(path)
+    assert not path.exists()
+
+
 def test_voice_model_hash_is_enforced(tmp_path, monkeypatch):
     from app import demo_voice
 

@@ -149,6 +149,7 @@ def _migrate() -> None:
         ("users", "is_active", "INTEGER DEFAULT 1"),
         ("users", "token_version", "INTEGER DEFAULT 1"),
         ("users", "last_login_at", "DATETIME"),
+        ("users", "last_seen_at", "BIGINT"),
         ("users", "operator_id", "INTEGER"),
         ("users", "must_change_password", "INTEGER DEFAULT 0"),
         ("calls", "flagged", "INTEGER DEFAULT 0"),

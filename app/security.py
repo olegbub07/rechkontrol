@@ -234,9 +234,25 @@ class LoginGate:
             self._prune(bucket, now)
             bucket.append(at)
 
+    def retry_after(self, key: str) -> int:
+        """Секунды до новой попытки. 0, если ключ ещё не заблокирован."""
+        now = time.time()
+        with self._lock:
+            bucket = self._hits.get(key)
+            if not bucket:
+                return 0
+            self._prune(bucket, now)
+            if len(bucket) < self.max_attempts:
+                return 0
+            return max(1, int(self.window_sec - (now - bucket[0])) + 1)
+
     def ok(self, key: str) -> None:
         with self._lock:
             self._hits.pop(key, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._hits.clear()
 
 
 login_gate = LoginGate()
@@ -270,6 +286,13 @@ def client_ip(request: Request) -> str:
     headers = {key.lower(): value for key, value in request.headers.items()}
     client = (request.client.host, request.client.port) if request.client else None
     return _peer_ip(client, headers)
+
+
+_LOOPBACK_PEERS = frozenset({"127.0.0.1", "::1", "localhost", "local"})
+
+
+def loopback_peer(key: str) -> bool:
+    return key in _LOOPBACK_PEERS
 
 
 def client_key(request: Request) -> str:

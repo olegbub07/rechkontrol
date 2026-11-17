@@ -22,7 +22,7 @@ from app.crypto import EncryptedWriter, decrypt_bytes
 from app.db import after_commit, write_lock
 from app.diarize import assign_roles, label_speakers, merge_whisper_segments
 from app.models import Call, Operator, Transcript, User
-from app.quality import analyze
+from app.quality import analyze, script_sheet
 from app.security import (
     CALL_STATUSES,
     content_disposition,
@@ -34,6 +34,7 @@ from app.security import (
 from app.transcribe import local_model_ready
 from app.schemas import (
     AnalyzeTextIn,
+    ScriptOut,
     CallDetail,
     CallListItem,
     CallPatch,
@@ -124,7 +125,7 @@ def get_call(
 
 async def _store_encrypted(upload: UploadFile, path: Path, max_bytes: int) -> str:
     """Читает загрузку блоками, проверяет сигнатуру по первому блоку и сразу пишет шифротекст на диск."""
-    name = upload.filename or "audio.wav"
+    name = sanitize_filename(upload.filename)
     declared = getattr(upload, "size", None)
     if declared is not None and declared > max_bytes:
         raise HTTPException(413, f"{name}: файл больше {settings.max_upload_mb} МБ")
@@ -372,6 +373,13 @@ def create_operator(
         session.rollback()
         raise HTTPException(409, "Оператор с таким внешним ID уже есть") from exc
     return OperatorOut(id=op.id, name=op.name, external_id=op.external_id)
+
+
+@router.get("/script", response_model=ScriptOut)
+def get_script(session: Session = Depends(db_session), _: User = Depends(current_user)) -> ScriptOut:
+    """Памятка для чтения. Модель, лимиты и путь к ключу сюда не входят."""
+    stored = load_script(session)
+    return ScriptOut(**script_sheet(stored["company_phrases"], stored["extra_script_phrases"]))
 
 
 @router.get("/settings", response_model=SettingsOut)

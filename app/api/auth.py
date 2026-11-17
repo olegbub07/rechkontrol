@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
@@ -9,6 +10,7 @@ from app.timeutil import utcnow
 from app.api.deps import bearer, current_user, db_session
 from app.audit import write_audit
 from app.auth import (
+    account_lock_key,
     clear_login_failures,
     create_token,
     decode_token,
@@ -19,7 +21,7 @@ from app.auth import (
     needs_password_change,
     clear_password_failures,
     note_password_failure,
-    password_change_blocked,
+    password_lock_wait,
     verify_password,
 )
 from app.models import User
@@ -44,19 +46,22 @@ def _user_out(user: User) -> UserOut:
 
 @router.post("/auth/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, session: Session = Depends(db_session)) -> TokenOut:
+    username = body.username.strip()
     key = client_key(request)
-    if login_gate.blocked(key):
+    account = account_lock_key(username)
+    if login_gate.blocked(account) or login_gate.blocked(key):
         raise HTTPException(status_code=429, detail="Слишком много попыток входа. Подождите несколько минут.")
-    user = session.query(User).filter(User.username == body.username.strip()).one_or_none()
+    user = session.query(User).filter(User.username == username).one_or_none()
     hashed = user.password_hash if user is not None else None
     if user is None or not verify_password(body.password, hashed):
-        note_login_failure(key, body.username.strip(), request)
+        note_login_failure(key, username, request)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
     if user.is_active == 0:
-        note_login_failure(key, body.username.strip(), request)
+        note_login_failure(key, username, request)
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
-    clear_login_failures(key)
+    clear_login_failures(key, account)
     user.last_login_at = utcnow()
+    user.last_seen_at = int(time.time())
     write_audit(session, "login", user=user, request=request)
     return TokenOut(token=create_token(user), user=_user_out(user))
 
@@ -90,8 +95,13 @@ def change_password(
     db_user = session.get(User, user.id)
     if db_user is None:
         raise HTTPException(status_code=401, detail="Сессия истекла, войдите снова")
-    if password_change_blocked(db_user.id):
-        raise HTTPException(status_code=429, detail="Слишком много попыток смены пароля. Подождите несколько минут.")
+    wait = password_lock_wait(db_user.id)
+    if wait:
+        minutes = max(1, (wait + 59) // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Слишком много попыток смены пароля. Повторите через {minutes} мин.",
+        )
     if not verify_password(body.old_password, db_user.password_hash):
         note_password_failure(db_user.id, request)
         raise HTTPException(status_code=400, detail="Старый пароль неверен")

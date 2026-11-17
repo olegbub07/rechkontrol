@@ -42,6 +42,20 @@ class AdminPasswordIn(BaseModel):
     password: str = Field(min_length=10, max_length=128)
 
 
+class AdminUserOut(UserOut):
+    password_attempts: int = 0
+    password_locked: bool = False
+
+
+class AdminPasswordOut(UserOut):
+    token: str | None = None
+
+
+class SessionRevokeOut(BaseModel):
+    ok: bool = True
+    token: str | None = None
+
+
 class TokenOut(BaseModel):
     token: str
     user: UserOut
@@ -197,6 +211,18 @@ class DashboardOut(BaseModel):
     recent: list[CallListItem]
     attention: list[CallListItem] = Field(default_factory=list)
     queue: QueueOut
+
+
+class ScriptStepOut(BaseModel):
+    id: str
+    title: str
+    hint: str
+    examples: list[str]
+
+
+class ScriptOut(BaseModel):
+    steps: list[ScriptStepOut]
+    extra_script_phrases: list[str]
 
 
 class SettingsOut(BaseModel):

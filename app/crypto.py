@@ -80,6 +80,8 @@ def encrypt_bytes(data: bytes) -> bytes:
 # Старые файлы (один токен Fernet на весь файл) читаются как раньше.
 STREAM_MAGIC = b"RKC1\n"
 STREAM_CHUNK = 1024 * 1024
+# Fernet от блока 1 МБ занимает около 1,4 МБ. Большая длина в заголовке — порча файла.
+_MAX_STREAM_TOKEN = 4 * 1024 * 1024
 
 
 def _iter_stream_tokens(fh):
@@ -90,6 +92,8 @@ def _iter_stream_tokens(fh):
         if len(head) != 4:
             raise ValueError("повреждён зашифрованный файл")
         size = int.from_bytes(head, "big")
+        if size <= 0 or size > _MAX_STREAM_TOKEN:
+            raise ValueError("повреждён зашифрованный файл")
         token = fh.read(size)
         if len(token) != size:
             raise ValueError("повреждён зашифрованный файл")

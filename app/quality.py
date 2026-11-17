@@ -393,6 +393,66 @@ def _weighted(checks: list[CheckResult], category: str) -> float:
     return _clip(num / den)
 
 
+# Опечатки и обрывки нужны оценке, чтобы узнать фразу в расшифровке. В памятке их нет.
+_SHEET_SKIP = frozenset({"здравстуйте", "подскажите пожалуйста что", "верно ли"})
+
+
+def script_sheet(company_phrases: list[str] | None, extra_script_phrases: list[str] | None) -> dict:
+    """Памятка оператору: те же шаги, по которым считается метрика «скрипт»."""
+
+    def uniq(items) -> list[str]:
+        seen: list[str] = []
+        for item in items or []:
+            text = str(item).strip()
+            if text and text not in seen and text not in _SHEET_SKIP:
+                seen.append(text)
+        return seen
+
+    company = uniq(company_phrases)
+    extra = uniq(extra_script_phrases)
+    return {
+        "steps": [
+            {
+                "id": "greeting",
+                "title": "Приветствие",
+                "hint": "Скажите это в начале разговора.",
+                "examples": uniq(GREETINGS),
+            },
+            {
+                "id": "intro",
+                "title": "Представление",
+                "hint": "Назовите себя.",
+                "examples": uniq(INTRO),
+            },
+            {
+                "id": "company",
+                "title": "Название компании",
+                "hint": "Произнесите одно из названий, которые задал администратор.",
+                "examples": company,
+            },
+            {
+                "id": "help",
+                "title": "Предложение помощи",
+                "hint": "Спросите, с чем помочь.",
+                "examples": uniq(HELP_OFFER),
+            },
+            {
+                "id": "clarify",
+                "title": "Уточнение запроса",
+                "hint": "Уточните детали обращения.",
+                "examples": uniq(CLARIFY),
+            },
+            {
+                "id": "closing",
+                "title": "Завершение",
+                "hint": "Попрощайтесь и оставьте возможность обратиться снова.",
+                "examples": uniq(CLOSINGS),
+            },
+        ],
+        "extra_script_phrases": extra,
+    }
+
+
 def analyze(
     turns: list[dict],
     company_phrases: list[str] | None = None,

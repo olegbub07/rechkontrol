@@ -2,7 +2,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const state = { user: null, period: "30d", poll: null, live: null, page: 1, files: [], passwordNudge: false, unmaskedCall: null };
-const OPERATOR_BLOCKED = ["upload", "operators", "export", "dataset", "settings", "admin"];
+const OPERATOR_BLOCKED = ["upload", "operators", "export", "dataset", "admin"];
 
 function token() {
   return sessionStorage.getItem("rk_token");
@@ -54,6 +54,13 @@ async function api(path, opts = {}) {
       sessionStorage.removeItem("rk_token");
       state.user = null;
       showLogin();
+      if (typeof detail === "string" && detail.includes("просто")) {
+        const err = $("#login-error");
+        if (err) {
+          err.hidden = false;
+          err.textContent = detail;
+        }
+      }
     }
     if (res.status === 403 && typeof detail === "string" && detail.includes("Смените стартовый пароль")) {
       openAccount();
@@ -105,7 +112,10 @@ function closeNav() {
 
 function openAccount() {
   const dlg = $("#account-dialog");
+  showPwdError("");
   if (dlg && typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
+  const field = $("#pwd-self [name=old_password]");
+  if (field) field.focus();
 }
 
 function showBanner() {
@@ -131,11 +141,17 @@ function applyRoleNav() {
   const role = state.user?.role || "";
   document.body.classList.toggle("role-operator", role === "operator");
   document.body.classList.toggle("role-admin", role === "admin");
+  let n = 0;
   $$(".nav a").forEach((link) => {
     const name = link.dataset.nav;
-    if (role === "operator") link.hidden = name !== "dashboard" && name !== "calls";
+    if (role === "operator") link.hidden = name !== "dashboard" && name !== "calls" && name !== "settings";
     else if (name === "admin") link.hidden = role !== "admin";
     else link.hidden = false;
+    if (!link.hidden) {
+      n += 1;
+      const em = link.querySelector("em");
+      if (em) em.textContent = String(n).padStart(2, "0");
+    }
   });
   const side = $("#side-role");
   if (side) side.textContent = role === "operator" ? "кабинет оператора" : role === "admin" ? "кабинет администратора" : "локальный контур";
@@ -187,8 +203,12 @@ function pill(v) {
 function tonalityRu(t) {
   return { positive: "позитивная", negative: "негативная", neutral: "нейтральная" }[t] || t || "—";
 }
+const STATUSES = { queued: "в очереди", processing: "обрабатывается", done: "готово", error: "ошибка" };
+function statusKey(s) {
+  return Object.prototype.hasOwnProperty.call(STATUSES, s) ? s : "";
+}
 function statusRu(s) {
-  return { queued: "в очереди", processing: "обрабатывается", done: "готово", error: "ошибка" }[s] || s;
+  return STATUSES[s] || "неизвестный статус";
 }
 function dossierLine(call) {
   const live = call.status === "queued" || call.status === "processing";
@@ -223,6 +243,43 @@ function highlight(text, q) {
 function meter(value, cls = "meter", attrs = "") {
   const v = Math.max(0, Math.min(100, Number(value) || 0));
   return `<progress class="${cls}" max="100" value="${v.toFixed(1)}" ${attrs}></progress>`;
+}
+
+function passwordChecks(value) {
+  const text = value || "";
+  return {
+    len: text.length >= 10 && text.length <= 128,
+    letter: /[A-Za-zА-Яа-яЁё]/.test(text),
+    digit: /\d/.test(text),
+    symbol: /[^A-Za-zА-Яа-яЁё0-9]/.test(text),
+    edge: text.length > 0 && !/^\s/.test(text),
+  };
+}
+
+function passwordProblem(value) {
+  const checks = passwordChecks(value);
+  if (!value) return "Введите новый пароль";
+  if (!checks.len) return "Пароль должен быть от 10 до 128 символов";
+  if (!checks.edge) return "Пароль не должен начинаться с пробела";
+  if (!checks.letter) return "В пароле нужна хотя бы одна буква";
+  if (!checks.digit) return "В пароле нужна хотя бы одна цифра";
+  if (!checks.symbol) return "В пароле нужен знак, который не является буквой или цифрой";
+  return "";
+}
+
+function paintPasswordRules(input, list) {
+  if (!input || !list) return;
+  const checks = passwordChecks(input.value || "");
+  list.querySelectorAll("[data-rule]").forEach((item) => {
+    item.classList.toggle("ok", !!checks[item.dataset.rule]);
+  });
+}
+
+function showPwdError(message) {
+  const el = $("#pwd-error");
+  if (!el) return;
+  el.hidden = !message;
+  el.textContent = message || "";
 }
 
 function metricBars(op) {
@@ -298,7 +355,10 @@ async function route() {
     else if (parts[0] === "operators") await renderOperators(view);
     else if (parts[0] === "export") await renderExport(view);
     else if (parts[0] === "dataset") await renderDataset(view);
-    else if (parts[0] === "settings") await renderSettings(view);
+    else if (parts[0] === "settings") {
+      if (state.user?.role === "operator") await renderOperatorScript(view);
+      else await renderSettings(view);
+    }
     else if (parts[0] === "admin") await renderAdmin(view);
     else await renderDashboard(view);
     refreshQueueChip();
@@ -423,15 +483,16 @@ function donut(el, parts) {
     { k: "neutral", c: "#c9a44a", cls: "neu", l: "нейтральная" },
     { k: "negative", c: "#9c3b32", cls: "neg", l: "негативная" },
   ];
-  if (!map.some((item) => parts[item.k])) {
+  if (!map.some((item) => Number(parts[item.k]))) {
     el.innerHTML = `<p class="muted">Нет оценённых звонков, тональность пока не из чего собрать.</p>`;
     return;
   }
-  const total = map.reduce((s, x) => s + (parts[x.k] || 0), 0) || 1;
+  const count = (key) => Number(parts[key]) || 0;
+  const total = map.reduce((s, x) => s + count(x.k), 0) || 1;
   let acc = 0;
   const r = 42, c = 2 * Math.PI * r;
   const rings = map.map((x) => {
-    const v = parts[x.k] || 0;
+    const v = count(x.k);
     const dash = (v / total) * c;
     const rot = acc;
     acc += (v / total) * 360;
@@ -440,7 +501,7 @@ function donut(el, parts) {
   }).join("");
   el.innerHTML = `<div class="ring-wrap">
     <svg viewBox="0 0 100 100" width="132" height="132">${rings}</svg>
-    <div class="legend">${map.map((x) => `<div><span class="swatch ${x.cls}"></span>${x.l} — ${parts[x.k] || 0}</div>`).join("")}</div>
+    <div class="legend">${map.map((x) => `<div><span class="swatch ${x.cls}"></span>${x.l} — ${count(x.k)}</div>`).join("")}</div>
   </div>`;
 }
 
@@ -552,7 +613,7 @@ function callsMini(items) {
   return `<table><thead><tr><th>Когда</th><th>Файл</th><th>Оператор</th><th>Оценка</th></tr></thead><tbody>
     ${items.map((c) => `<tr class="link" data-go="#/calls/${c.id}">
       <td>${fmtDate(c.call_at)}</td><td>${escapeHtml(c.orig_filename)}</td>
-      <td>${escapeHtml(c.operator_name || "—")}${c.operator_external_id ? ` · ${escapeHtml(c.operator_external_id)}` : ""}</td><td>${c.status === "done" ? pill(c.overall) : statusRu(c.status)}</td>
+      <td>${escapeHtml(c.operator_name || "—")}${c.operator_external_id ? ` · ${escapeHtml(c.operator_external_id)}` : ""}</td><td>${c.status === "done" ? pill(c.overall) : escapeHtml(statusRu(c.status))}</td>
     </tr>`).join("")}
   </tbody></table>`;
 }
@@ -661,7 +722,7 @@ function callsTable(items) {
       <td>${c.resolution == null ? "—" : Number(c.resolution).toFixed(0)}</td>
       <td>${c.violation_pct == null ? "—" : Number(c.violation_pct).toFixed(0) + "%"}</td>
       <td>${tonalityRu(c.tonality)}</td>
-      <td><span class="status-dot ${c.status}"></span>${statusRu(c.status)}${c.status === "processing" ? ` ${c.progress}%` : ""}</td>
+      <td><span class="status-dot ${statusKey(c.status)}"></span>${escapeHtml(statusRu(c.status))}${c.status === "processing" ? ` ${Number(c.progress) || 0}%` : ""}</td>
     </tr>`).join("")}
   </tbody></table>`;
 }
@@ -696,7 +757,7 @@ async function renderCall(view, id) {
     </div>
     <div class="dossier">
       <div class="card featured">
-        <p class="eyebrow">${statusRu(call.status)}</p>
+        <p class="eyebrow">${escapeHtml(statusRu(call.status))}</p>
         <h2>${escapeHtml(call.orig_filename)}</h2>
         <p class="muted" id="live-label"></p>
         ${live ? meter(call.progress || 4, "meter gold", 'id="live-progress"') : `<p class="muted">${slaText(call.duration_sec, call.processed_sec)}</p>`}
@@ -754,7 +815,7 @@ async function renderCall(view, id) {
     const needle = (query || "").trim().toLowerCase();
     const rows = (call.segments || []).filter((s) => !needle || String(s.text || "").toLowerCase().includes(needle));
     box.innerHTML = rows.length ? rows.map((s) => `
-      <button type="button" class="turn ${s.role}" data-start="${Number(s.start) || 0}" data-end="${Number(s.end) || 0}">
+      <button type="button" class="turn ${s.role === "operator" ? "operator" : "client"}" data-start="${Number(s.start) || 0}" data-end="${Number(s.end) || 0}">
         <div class="meta">${s.role === "operator" ? "Оператор" : "Клиент"} · ${mmss(s.start)}</div>
         <div>${typeof turnText === "function" ? turnText(s, query) : highlight(s.text, query)}</div>
       </button>`).join("") : `<p class="empty">${escapeHtml(call.full_text || "Текст появится после расшифровки")}</p>`;
@@ -1179,6 +1240,62 @@ async function renderDataset(view) {
   if (s.status === "downloading" || s.status === "evaluating") poll();
 }
 
+function scriptTicks() {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem("rk_script_ticks") || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function phraseLabel(phrase) {
+  const text = String(phrase || "");
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+}
+
+function scriptItem(group, phrase, ticks) {
+  const id = `${group}:${phrase}`;
+  return `<li><label class="script-item"><input type="checkbox" data-tick="${escapeHtml(id)}"${ticks.has(id) ? " checked" : ""}><span>${escapeHtml(phraseLabel(phrase))}</span></label></li>`;
+}
+
+function bindScriptTicks() {
+  $$(".script-item input").forEach((box) => {
+    box.onchange = () => {
+      const ticks = scriptTicks();
+      if (box.checked) ticks.add(box.dataset.tick);
+      else ticks.delete(box.dataset.tick);
+      sessionStorage.setItem("rk_script_ticks", JSON.stringify([...ticks]));
+    };
+  });
+}
+
+async function renderOperatorScript(view) {
+  setNav("settings", "Скрипт разговора", "Держите фразы перед глазами, пока говорите с клиентом", "Памятка");
+  const sheet = await api("/script");
+  const ticks = scriptTicks();
+  const steps = (sheet.steps || []).map((step) => {
+    const examples = step.examples || [];
+    const items = examples.length
+      ? examples.map((phrase) => scriptItem(step.id, phrase, ticks)).join("")
+      : `<li class="muted">Администратор ещё не задал формулировки.</li>`;
+    return `<section class="card script-step"><h2>${escapeHtml(step.title)}</h2><p class="muted">${escapeHtml(step.hint)}</p><ul class="script-list">${items}</ul></section>`;
+  }).join("");
+  const extra = sheet.extra_script_phrases || [];
+  const extraItems = extra.length
+    ? extra.map((phrase) => scriptItem("extra", phrase, ticks)).join("")
+    : `<li class="muted">Дополнительных фраз пока нет. Их добавляет администратор.</li>`;
+  view.innerHTML = `
+    <p class="page-lead">Это памятка, по ней считается оценка «Скрипт». Отметьте фразу, чтобы не потерять её в разговоре. Отметки остаются только в этом окне браузера и на оценку не влияют.</p>
+    <div class="script-sheet">${steps}</div>
+    <section class="card script-step mt">
+      <h2>Дополнительные фразы</h2>
+      <p class="muted">Их нужно произнести так, как задал администратор.</p>
+      <ul class="script-list">${extraItems}</ul>
+    </section>`;
+  bindScriptTicks();
+}
+
 async function renderSettings(view) {
   setNav("settings", "Скрипт и контур", "Фразы компании и обязательные реплики скрипта", "Настройки");
   const s = await api("/settings");
@@ -1236,6 +1353,11 @@ const AUDIT_RU = {
   "user.disable": "учётная запись отключена",
   "user.enable": "учётная запись включена",
   "user.password": "сброс пароля",
+  "user.sessions": "сессии закрыты",
+  "user.unlock": "снята блокировка пароля",
+  "user.operator": "карточка сотрудника",
+  "login.unlock": "снята блокировка входа",
+  password_fail: "неудачная смена пароля",
   "dataset.download": "скачивание датасета",
   "dataset.import": "импорт датасета",
   logout: "выход",
@@ -1283,17 +1405,34 @@ function postureItems(posture) {
   ].map(([kind, title, text]) => `<li class="${kind === "ok" ? "" : "bad"}"><div><b>${title}</b><span>${text}</span></div></li>`).join("");
 }
 
+function operatorOptions(operators, selected) {
+  const head = `<option value="">без карточки</option>`;
+  const rest = (operators || []).map((op) => {
+    const mark = String(op.id) === String(selected || "") ? "selected" : "";
+    const ext = op.external_id ? " · " + escapeHtml(op.external_id) : "";
+    return `<option value="${op.id}" ${mark}>${escapeHtml(op.name)}${ext}</option>`;
+  }).join("");
+  return head + rest;
+}
+
 function userRows(users, operators) {
-  const names = Object.fromEntries((operators || []).map((op) => [String(op.id), op.name]));
   return users.map((u) => {
     const self = u.id === state.user.id;
     const role = ["admin", "analyst", "operator"].includes(u.role) ? u.role : "analyst";
-    const linked = u.operator_id ? names[String(u.operator_id)] : "";
+    const lock = u.password_locked
+      ? `<div><span class="badge warn">смена пароля заблокирована</span></div>`
+      : u.password_attempts
+        ? `<div class="muted">попыток смены: ${u.password_attempts}</div>`
+        : "";
+    const unlock = !self && (u.password_locked || u.password_attempts)
+      ? `<button class="btn ghost row js-unlock" type="button" data-id="${u.id}">Снять блок пароля</button>`
+      : "";
     return `<tr>
       <td>
         <b>${escapeHtml(u.username)}</b>
-        ${linked ? `<div class="muted">${escapeHtml(linked)}</div>` : ""}
-        ${u.must_change_password ? `<div><span class="badge warn">смените пароль</span></div>` : ""}
+        ${self ? `<div class="muted">это вы</div>` : ""}
+        ${u.must_change_password ? `<div><span class="badge warn">ждёт смены пароля</span></div>` : ""}
+        ${lock}
       </td>
       <td>
         <select class="role-select js-role" data-id="${u.id}" data-current="${role}" data-operator="${u.operator_id || ""}">
@@ -1302,15 +1441,39 @@ function userRows(users, operators) {
           <option value="admin" ${role === "admin" ? "selected" : ""}>администратор</option>
         </select>
       </td>
+      <td>
+        <select class="role-select js-operator" data-id="${u.id}" data-current="${u.operator_id || ""}" data-role="${role}">
+          ${operatorOptions(operators, u.operator_id)}
+        </select>
+      </td>
       <td>${u.is_active ? `<span class="pill ok">активен</span>` : `<span class="pill bad">отключён</span>`}</td>
       <td>${u.last_login_at ? fmtDate(u.last_login_at) : "ещё не входил"}</td>
       <td>
         <div class="user-actions">
           ${self ? `<button class="btn ghost row js-self-pwd" type="button">Свой пароль</button>` : `<button class="btn ghost row js-toggle" type="button" data-id="${u.id}" data-on="${u.is_active ? "0" : "1"}">${u.is_active ? "Отключить" : "Включить"}</button>`}
+          <button class="btn ghost row js-sessions" type="button" data-id="${u.id}" data-self="${self ? "1" : "0"}">${self ? "Закрыть другие сессии" : "Закрыть сессии"}</button>
+          ${unlock}
         </div>
       </td>
     </tr>`;
   }).join("");
+}
+
+function auditRow(r) {
+  const text = `${r.username || ""} ${AUDIT_RU[r.action] || r.action} ${r.detail || ""} ${r.ip || ""}`.toLowerCase();
+  return `<tr data-text="${escapeHtml(text)}">
+    <td>${fmtDate(r.created_at)}</td>
+    <td>${escapeHtml(r.username || "—")}</td>
+    <td>${escapeHtml(AUDIT_RU[r.action] || r.action)}</td>
+    <td>${escapeHtml(r.detail || "")}</td>
+    <td>${escapeHtml(r.ip || "")}</td>
+  </tr>`;
+}
+
+function keepSession(out) {
+  if (!out || !out.token) return;
+  sessionStorage.setItem("rk_token", out.token);
+  if (out.username) state.user = out;
 }
 
 async function renderAdmin(view) {
@@ -1318,7 +1481,7 @@ async function renderAdmin(view) {
     location.hash = "#/";
     return;
   }
-  setNav("admin", "Администрирование", "Учётные записи, журнал действий и защита базы", "Контур");
+  setNav("admin", "Администрирование", "Люди, сессии, блокировки и защита базы", "Контур");
   let overview;
   let users;
   let audit;
@@ -1337,17 +1500,27 @@ async function renderAdmin(view) {
     return;
   }
   const auditRows = audit.items || [];
+  const auditTotal = audit.total || auditRows.length;
   view.innerHTML = `
+    <p class="page-lead">Оператор видит только свои звонки. Аналитик смотрит все разговоры, пишет заметки и выгружает KPI. Администратор слушает любую запись, ведёт людей, закрывает чужие сессии и возвращает ошибки в очередь. Свой пароль меняется кнопкой «Сменить пароль» в шапке: причина, если он не сохранился, пишется прямо в окне.</p>
     <div class="grid kpis">
       <div class="card kpi"><div class="label">Пользователи</div><div class="value">${overview.users}</div><div class="hint">администраторов: ${overview.admins}</div></div>
       <div class="card kpi"><div class="label">Звонки</div><div class="value">${overview.calls}</div><div class="hint">в очереди ${overview.queued}</div></div>
-      <div class="card kpi"><div class="label">Ошибки обработки</div><div class="value">${overview.failed}</div><div class="hint">записей со статусом «ошибка»</div></div>
+      <div class="card kpi">
+        <div class="label">Ошибки обработки</div>
+        <div class="value">${overview.failed}</div>
+        <div class="hint">записей со статусом «ошибка»</div>
+        ${overview.failed ? `<button class="btn row mt" id="retry-failed" type="button">Вернуть в очередь</button>` : ""}
+      </div>
       <div class="card kpi"><div class="label">Журнал</div><div class="value">${overview.audit}</div><div class="hint">событий аудита</div></div>
     </div>
     <div class="grid two mt">
       <div class="card featured">
         <h2>Защита</h2>
         <ul class="posture">${postureItems(posture)}</ul>
+        ${overview.login_locks
+          ? `<button class="btn row mt" id="clear-locks" type="button">Снять блокировку входа (${overview.login_locks})</button>`
+          : `<p class="muted">Блокировок входа сейчас нет.</p>`}
       </div>
       <div class="card">
         <h2>Новый пользователь</h2>
@@ -1364,7 +1537,7 @@ async function renderAdmin(view) {
             <select name="role" id="new-role">
               <option value="operator">оператор — только свои звонки, без админки</option>
               <option value="analyst" selected>аналитик — кабинет без управления людьми</option>
-              <option value="admin">администратор — пользователи, журнал и все звонки</option>
+              <option value="admin">администратор — люди, журнал и все звонки</option>
             </select>
           </label>
           <label id="new-operator-label" hidden>Карточка сотрудника
@@ -1379,37 +1552,45 @@ async function renderAdmin(view) {
     </div>
     <div class="card mt">
       <h2>Учётные записи</h2>
-      <p class="muted">Оператор видит только свои звонки и не открывает админку. Аналитик смотрит все звонки, ставит заметки и выгружает KPI. Администратор слушает любой звонок, удаляет записи и ведёт людей. Последнего администратора нельзя отключить.</p>
-      <table>
-        <thead><tr><th>Логин</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th></th></tr></thead>
-        <tbody>${userRows(users, operators)}</tbody>
-      </table>
-      <h2 class="mt">Сбросить пароль сотрудника</h2>
+      <p class="muted">Последнего администратора нельзя отключить и нельзя понизить. «Закрыть сессии» выгоняет человека из кабинета, пароль при этом не меняется. Свою блокировку смены пароля снять нельзя: её снимает другой администратор или пауза в 15 минут.</p>
+      <div class="table-scroll desk">
+        <table>
+          <thead><tr><th>Логин</th><th>Роль</th><th>Карточка</th><th>Статус</th><th>Последний вход</th><th></th></tr></thead>
+          <tbody>${userRows(users, operators)}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card mt">
+      <h2>Пароль сотрудника</h2>
+      <p class="muted">Новый пароль сообщите человеку лично. Его сессии закроются, и при следующем входе кабинет попросит сменить пароль. Если выбрать себя, эта сессия сохранится.</p>
       <form id="reset-form" class="toolbar">
         <label>Пользователь
           <select name="user_id">${users.map((u) => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join("")}</select>
         </label>
-        <label>Новый пароль <input name="password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" /></label>
-        <button class="btn danger row" type="submit">Сбросить и закрыть сессии</button>
+        <label class="grow">Новый пароль <input name="password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" /></label>
+        <button class="btn danger row" type="submit">Задать пароль</button>
       </form>
+      <ul class="pw-rules" id="reset-rules">
+        <li data-rule="len">от 10 символов</li>
+        <li data-rule="letter">есть буква</li>
+        <li data-rule="digit">есть цифра</li>
+        <li data-rule="symbol">есть символ</li>
+      </ul>
     </div>
     <div class="card mt">
       <div class="toolbar">
         <h2 class="inline-title">Журнал аудита</h2>
         <label class="grow">Фильтр <input id="audit-q" placeholder="логин, действие, IP" maxlength="80" /></label>
       </div>
-      <table>
-        <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th><th>IP</th></tr></thead>
-        <tbody id="audit-body">
-          ${auditRows.length ? auditRows.map((r) => `<tr data-text="${escapeHtml(`${r.username || ""} ${AUDIT_RU[r.action] || r.action} ${r.detail || ""} ${r.ip || ""}`.toLowerCase())}">
-            <td>${fmtDate(r.created_at)}</td>
-            <td>${escapeHtml(r.username || "—")}</td>
-            <td>${escapeHtml(AUDIT_RU[r.action] || r.action)}</td>
-            <td>${escapeHtml(r.detail || "")}</td>
-            <td>${escapeHtml(r.ip || "")}</td>
-          </tr>`).join("") : `<tr><td colspan="5">Журнал пока пуст.</td></tr>`}
-        </tbody>
-      </table>
+      <div class="table-scroll desk">
+        <table>
+          <thead><tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Детали</th><th>IP</th></tr></thead>
+          <tbody id="audit-body">
+            ${auditRows.length ? auditRows.map(auditRow).join("") : `<tr><td colspan="5">Журнал пока пуст.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      ${auditRows.length < auditTotal ? `<button class="btn row mt" id="audit-more" type="button">Показать ещё</button>` : ""}
     </div>`;
   const rolePick = $("#new-role");
   const operatorLabel = $("#new-operator-label");
@@ -1417,16 +1598,14 @@ async function renderAdmin(view) {
   rolePick.addEventListener("change", syncOperatorField);
   syncOperatorField();
   const pw = $("#user-form [name=password]");
-  pw.addEventListener("input", () => {
-    const value = pw.value || "";
-    $("#pw-rules [data-rule=len]").classList.toggle("ok", value.length >= 10);
-    $("#pw-rules [data-rule=letter]").classList.toggle("ok", /[A-Za-zА-Яа-я]/.test(value));
-    $("#pw-rules [data-rule=digit]").classList.toggle("ok", /\d/.test(value));
-    $("#pw-rules [data-rule=symbol]").classList.toggle("ok", /[^A-Za-zА-Яа-яЁё0-9]/.test(value));
-  });
+  pw.addEventListener("input", () => paintPasswordRules(pw, $("#pw-rules")));
+  const resetPw = $("#reset-form [name=password]");
+  resetPw.addEventListener("input", () => paintPasswordRules(resetPw, $("#reset-rules")));
   $("#user-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
+    const problem = passwordProblem(f.password.value);
+    if (problem) { toast(problem, true); return; }
     try {
       const payload = { username: f.username.value, password: f.password.value, role: f.role.value };
       if (f.role.value === "operator") payload.operator_id = Number(f.operator_id.value);
@@ -1438,29 +1617,80 @@ async function renderAdmin(view) {
   $("#reset-form").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
+    const problem = passwordProblem(f.password.value);
+    if (problem) { toast(problem, true); return; }
     const name = f.user_id.options[f.user_id.selectedIndex].textContent;
-    if (!window.confirm(`Сбросить пароль «${name}» и закрыть его сессии?`)) return;
+    const self = String(f.user_id.value) === String(state.user?.id);
+    const ask = self
+      ? "Задать новый пароль своей учётке? Эта сессия сохранится, остальные закроются."
+      : `Задать новый пароль «${name}» и закрыть его сессии?`;
+    if (!window.confirm(ask)) return;
     try {
-      await api(`/admin/users/${f.user_id.value}/password`, { method: "POST", json: { password: f.password.value } });
-      toast("Пароль сброшен, старые сессии закрыты");
+      const out = await api(`/admin/users/${f.user_id.value}/password`, { method: "POST", json: { password: f.password.value } });
+      keepSession(out);
+      toast(self ? "Ваш пароль обновлён, эта сессия сохранена" : "Пароль задан, старые сессии закрыты");
       f.password.value = "";
+      paintPasswordRules(resetPw, $("#reset-rules"));
+      if (!self) renderAdmin(view);
     } catch (err) { toast(err.message, true); }
   };
+  const retry = $("#retry-failed");
+  if (retry) {
+    retry.onclick = async () => {
+      if (!window.confirm("Вернуть все ошибочные записи с аудио в очередь?")) return;
+      try {
+        const out = await api("/calls/retry-failed", { method: "POST" });
+        toast(`В очередь возвращено: ${out.retried}`);
+        renderAdmin(view);
+      } catch (err) { toast(err.message, true); }
+    };
+  }
+  const clearLocks = $("#clear-locks");
+  if (clearLocks) {
+    clearLocks.onclick = async () => {
+      try {
+        const out = await api("/admin/locks/login", { method: "POST" });
+        toast(`Блокировка входа снята, записей: ${out.cleared}`);
+        renderAdmin(view);
+      } catch (err) { toast(err.message, true); }
+    };
+  }
   $$(".js-role").forEach((sel) => {
     sel.onchange = async () => {
       if (sel.value === sel.dataset.current) return;
       const payload = { role: sel.value };
+      const card = sel.closest("tr")?.querySelector(".js-operator");
+      const operatorId = card && card.value ? card.value : sel.dataset.operator;
       if (sel.value === "operator") {
-        if (!sel.dataset.operator) {
-          toast("Оператору нужна карточка сотрудника. Создайте такую учётку в форме выше.", true);
+        if (!operatorId) {
+          toast("Сначала выберите карточку сотрудника в соседней колонке.", true);
           sel.value = sel.dataset.current;
           return;
         }
-        payload.operator_id = Number(sel.dataset.operator);
+        payload.operator_id = Number(operatorId);
       }
       try {
         await api(`/admin/users/${sel.dataset.id}`, { method: "PATCH", json: payload });
         toast("Роль обновлена. Старая сессия этого пользователя закрыта");
+        renderAdmin(view);
+      } catch (err) {
+        toast(err.message, true);
+        sel.value = sel.dataset.current;
+      }
+    };
+  });
+  $$(".js-operator").forEach((sel) => {
+    sel.onchange = async () => {
+      if (sel.value === (sel.dataset.current || "")) return;
+      if (!sel.value && sel.dataset.role === "operator") {
+        toast("Оператору нужна карточка сотрудника.", true);
+        sel.value = sel.dataset.current;
+        return;
+      }
+      const payload = { operator_id: sel.value ? Number(sel.value) : null };
+      try {
+        await api(`/admin/users/${sel.dataset.id}`, { method: "PATCH", json: payload });
+        toast("Карточка сотрудника обновлена");
         renderAdmin(view);
       } catch (err) {
         toast(err.message, true);
@@ -1479,13 +1709,54 @@ async function renderAdmin(view) {
     };
   });
   $$(".js-self-pwd").forEach((b) => { b.onclick = openAccount; });
+  $$(".js-sessions").forEach((b) => {
+    b.onclick = async () => {
+      const self = b.dataset.self === "1";
+      const ask = self ? "Закрыть другие сессии этой учётки? Это окно останется открытым." : "Закрыть все сессии этого пользователя?";
+      if (!window.confirm(ask)) return;
+      try {
+        const out = await api(`/admin/users/${b.dataset.id}/sessions`, { method: "POST" });
+        keepSession(out);
+        toast(self ? "Другие сессии закрыты" : "Сессии закрыты");
+      } catch (err) { toast(err.message, true); }
+    };
+  });
+  $$(".js-unlock").forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/admin/users/${b.dataset.id}/unlock`, { method: "POST" });
+        toast("Блокировка смены пароля снята");
+        renderAdmin(view);
+      } catch (err) { toast(err.message, true); }
+    };
+  });
   const auditQ = $("#audit-q");
-  if (auditQ) {
-    auditQ.oninput = () => {
-      const q = auditQ.value.trim().toLowerCase();
-      $$("#audit-body tr").forEach((row) => {
-        row.hidden = q.length > 0 && !(row.dataset.text || "").includes(q);
-      });
+  const filterAudit = () => {
+    if (!auditQ) return;
+    const q = auditQ.value.trim().toLowerCase();
+    $$("#audit-body tr").forEach((row) => {
+      row.hidden = q.length > 0 && !(row.dataset.text || "").includes(q);
+    });
+  };
+  if (auditQ) auditQ.oninput = filterAudit;
+  const more = $("#audit-more");
+  let auditPage = 1;
+  if (more) {
+    more.onclick = async () => {
+      auditPage += 1;
+      more.disabled = true;
+      try {
+        const next = await api(`/admin/audit?page_size=40&page=${auditPage}`);
+        const rows = next.items || [];
+        if (rows.length) $("#audit-body").insertAdjacentHTML("beforeend", rows.map(auditRow).join(""));
+        filterAudit();
+        const shown = $$("#audit-body tr").length;
+        if (!rows.length || shown >= (next.total || 0)) more.hidden = true;
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        more.disabled = false;
+      }
     };
   }
 }
@@ -1526,9 +1797,39 @@ $("#pwd-cancel").addEventListener("click", () => $("#account-dialog").close());
 $("#account-dialog").addEventListener("cancel", (event) => {
   if (state.user?.must_change_password) event.preventDefault();
 });
+const pwdNew = $("#pwd-new");
+if (pwdNew) pwdNew.addEventListener("input", () => paintPasswordRules(pwdNew, $("#self-pw-rules")));
+const pwdReveal = $("#pwd-reveal");
+if (pwdReveal) {
+  pwdReveal.addEventListener("change", () => {
+    const type = pwdReveal.checked ? "text" : "password";
+    $$("#pwd-self input").forEach((input) => {
+      if (input === pwdReveal) return;
+      input.type = type;
+    });
+  });
+}
 $("#pwd-self").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
+  const save = $("#pwd-save");
+  showPwdError("");
+  if (!f.old_password.value) {
+    showPwdError("Введите текущий пароль — тот, с которым вы вошли, а не подсказку браузера.");
+    return;
+  }
+  const problem = passwordProblem(f.new_password.value);
+  if (problem) { showPwdError(problem); return; }
+  if (f.new_password.value !== f.confirm_password.value) {
+    showPwdError("Новый пароль и повтор не совпадают.");
+    return;
+  }
+  if (f.new_password.value === f.old_password.value) {
+    showPwdError("Новый пароль должен отличаться от старого.");
+    return;
+  }
+  save.disabled = true;
+  save.textContent = "Сохраняю…";
   try {
     const out = await api("/auth/password", { method: "POST", json: { old_password: f.old_password.value, new_password: f.new_password.value } });
     sessionStorage.setItem("rk_token", out.token);
@@ -1536,11 +1837,16 @@ $("#pwd-self").addEventListener("submit", async (e) => {
     state.passwordNudge = false;
     showBanner();
     f.reset();
+    paintPasswordRules(pwdNew, $("#self-pw-rules"));
+    if (pwdReveal) pwdReveal.checked = false;
     $("#account-dialog").close();
-    toast("Пароль обновлён, другие сессии закрыты");
+    toast("Пароль обновлён. В следующий раз входите уже им. Другие сессии закрыты");
     route();
   } catch (err) {
-    toast(err.message, true);
+    showPwdError(err.message || "Пароль не изменился");
+  } finally {
+    save.disabled = false;
+    save.textContent = "Сохранить пароль";
   }
 });
 $("#nav-toggle").addEventListener("click", () => {

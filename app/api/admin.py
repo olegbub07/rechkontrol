@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -7,12 +8,21 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session, require_admin
 from app.audit import write_audit
-from app.auth import hash_password, needs_password_change
+from app.auth import clear_all_login_locks, clear_password_failures, create_token, hash_password, needs_password_change
 from app.config import settings
 from app.db import db_guard_status
-from app.models import AuditLog, Call, Operator, User
+from app.models import AuditLog, Call, Operator, SecurityMark, User
 from app.passwords import PasswordError, validate_password, validate_role, validate_username
-from app.schemas import AdminPasswordIn, AdminUserIn, AdminUserPatch, UserOut
+from app.schemas import (
+    AdminPasswordIn,
+    AdminPasswordOut,
+    AdminUserIn,
+    AdminUserOut,
+    AdminUserPatch,
+    SessionRevokeOut,
+    UserOut,
+)
+from app.security import password_gate
 
 router = APIRouter(tags=["admin"])
 
@@ -44,8 +54,22 @@ def _active_admins(session: Session) -> int:
     return session.query(User).filter(User.role == "admin", User.is_active == 1).count()
 
 
+def _password_attempts(session: Session) -> dict[str, int]:
+    now = int(time.time())
+    rows = (
+        session.query(SecurityMark.subject)
+        .filter(SecurityMark.kind == "password_fail", SecurityMark.expires_at > now)
+        .all()
+    )
+    counts: dict[str, int] = {}
+    for (subject,) in rows:
+        counts[subject] = counts.get(subject, 0) + 1
+    return counts
+
+
 @router.get("/admin/overview")
 def overview(session: Session = Depends(db_session), _: User = Depends(require_admin)) -> dict:
+    now = int(time.time())
     return {
         "users": session.query(User).count(),
         "admins": _active_admins(session),
@@ -53,6 +77,9 @@ def overview(session: Session = Depends(db_session), _: User = Depends(require_a
         "queued": session.query(Call).filter(Call.status == "queued").count(),
         "failed": session.query(Call).filter(Call.status == "error").count(),
         "audit": session.query(AuditLog).count(),
+        "login_locks": session.query(SecurityMark)
+        .filter(SecurityMark.kind == "login_fail", SecurityMark.expires_at > now)
+        .count(),
     }
 
 
@@ -69,10 +96,17 @@ def posture(session: Session = Depends(db_session), _: User = Depends(require_ad
     }
 
 
-@router.get("/admin/users", response_model=list[UserOut])
-def list_users(session: Session = Depends(db_session), _: User = Depends(require_admin)) -> list[UserOut]:
+@router.get("/admin/users", response_model=list[AdminUserOut])
+def list_users(session: Session = Depends(db_session), _: User = Depends(require_admin)) -> list[AdminUserOut]:
     rows = session.query(User).order_by(User.id.asc()).all()
-    return [_out(u) for u in rows]
+    attempts = _password_attempts(session)
+    limit = password_gate.max_attempts
+    result: list[AdminUserOut] = []
+    for user in rows:
+        base = _out(user).model_dump()
+        count = attempts.get(f"pwd:{user.id}", 0)
+        result.append(AdminUserOut(**base, password_attempts=count, password_locked=count >= limit))
+    return result
 
 
 @router.post("/admin/users", response_model=UserOut)
@@ -117,8 +151,14 @@ def patch_user(
     user = session.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    if body.operator_id is not None:
-        user.operator_id = _operator_link(session, "operator", body.operator_id)
+    if "operator_id" in body.model_fields_set:
+        if body.operator_id is None:
+            if user.role == "operator":
+                raise HTTPException(status_code=400, detail="Оператору нужна карточка сотрудника")
+            user.operator_id = None
+        else:
+            user.operator_id = _operator_link(session, "operator", body.operator_id)
+        write_audit(session, "user.operator", user=admin, detail=user.username, request=request)
     if body.role is not None:
         try:
             role = validate_role(body.role)
@@ -150,14 +190,14 @@ def patch_user(
     return _out(user)
 
 
-@router.post("/admin/users/{user_id}/password", response_model=UserOut)
+@router.post("/admin/users/{user_id}/password", response_model=AdminPasswordOut)
 def reset_password(
     user_id: int,
     body: AdminPasswordIn,
     request: Request,
     session: Session = Depends(db_session),
     admin: User = Depends(require_admin),
-) -> UserOut:
+) -> AdminPasswordOut:
     user = session.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -168,9 +208,59 @@ def reset_password(
     user.password_hash = hash_password(password)
     user.must_change_password = 0 if user.id == admin.id else 1
     user.token_version = int(user.token_version or 1) + 1
+    clear_password_failures(user.id)
     write_audit(session, "user.password", user=admin, detail=user.username, request=request)
     session.flush()
-    return _out(user)
+    token = create_token(user) if user.id == admin.id else None
+    return AdminPasswordOut(**_out(user).model_dump(), token=token)
+
+
+@router.post("/admin/users/{user_id}/sessions", response_model=SessionRevokeOut)
+def revoke_sessions(
+    user_id: int,
+    request: Request,
+    session: Session = Depends(db_session),
+    admin: User = Depends(require_admin),
+) -> SessionRevokeOut:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    user.token_version = int(user.token_version or 1) + 1
+    write_audit(session, "user.sessions", user=admin, detail=user.username, request=request)
+    session.flush()
+    token = create_token(user) if user.id == admin.id else None
+    return SessionRevokeOut(token=token)
+
+
+@router.post("/admin/users/{user_id}/unlock")
+def unlock_password(
+    user_id: int,
+    request: Request,
+    session: Session = Depends(db_session),
+    admin: User = Depends(require_admin),
+) -> dict:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if user.id == admin.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Свою блокировку смены пароля снять нельзя. Подождите указанное время или попросите другого администратора.",
+        )
+    clear_password_failures(user.id)
+    write_audit(session, "user.unlock", user=admin, detail=user.username, request=request)
+    return {"ok": True}
+
+
+@router.post("/admin/locks/login")
+def clear_login_lock(
+    request: Request,
+    session: Session = Depends(db_session),
+    admin: User = Depends(require_admin),
+) -> dict:
+    cleared = clear_all_login_locks()
+    write_audit(session, "login.unlock", user=admin, detail=str(cleared), request=request)
+    return {"cleared": cleared}
 
 
 @router.get("/admin/audit")

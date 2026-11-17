@@ -21,7 +21,7 @@ from app.crypto import get_fernet, jwt_secret
 from app.db import SessionLocal, init_db, protect_store
 from app.security import SecurityHeadersMiddleware, clean_tmp_dir, trusted_hosts
 from app.seed import seed_if_empty
-from app.transcribe import local_model_ready, model_loaded
+from app.transcribe import local_model_ready
 from app.worker import start_workers, stop_workers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -95,20 +95,8 @@ async def unhandled(request: Request, exc: Exception):
 
 @app.get("/api/health")
 def health() -> dict:
-    from app.db import SessionLocal as SL
-    from app.models import Call
-
-    with SL() as session:
-        queued = session.query(Call).filter(Call.status == "queued").count()
-        processing = session.query(Call).filter(Call.status == "processing").count()
-    return {
-        "status": "ok",
-        "local": True,
-        "offline": local_model_ready(),
-        "whisper_loaded": model_loaded(),
-        "whisper_model": settings.whisper_model,
-        "queue": {"queued": queued, "processing": processing},
-    }
+    """Без входа отдаём только живость. Очередь и модель видны в кабинете после авторизации."""
+    return {"status": "ok"}
 
 
 if STATIC_DIR.exists():

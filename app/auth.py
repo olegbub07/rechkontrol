@@ -128,29 +128,45 @@ def decode_token(token: str) -> dict:
     return payload
 
 
+def account_lock_key(username: str) -> str:
+    """Ключ блокировки входа по логину. Колонка subject — 80 символов, «acct:» + 64 умещается."""
+    return "acct:" + (username or "").strip()[:64]
+
+
 def note_login_failure(key: str, username: str, request: Request | None = None) -> None:
-    """Пишет неудачу сразу: ответ 401 откатывает сессию запроса, и журнал иначе теряется."""
+    """Пишет неудачу сразу: ответ 401 откатывает сессию запроса, и журнал иначе теряется.
+
+    Счётчик учётки ведётся всегда. Счётчик адреса — только если клиент не на петле:
+    на 127.0.0.1 все люди этой машины делят один адрес, и восемь опечаток иначе
+    закрыли бы вход остальным.
+    """
     from app.audit import write_audit
     from app.models import SecurityMark
-    from app.security import login_gate
+    from app.security import login_gate, loopback_peer
 
-    login_gate.fail(key)
+    account = account_lock_key(username)
+    login_gate.fail(account)
+    lock_ip = bool(key) and key != account and not loopback_peer(key)
+    if lock_ip:
+        login_gate.fail(key)
     now = int(time.time())
     try:
         lock, factory = _mark_session()
         with lock, factory() as session:
             session.query(SecurityMark).filter(SecurityMark.expires_at <= now).delete()
-            _add_mark(session, "login_fail", key, now, now + login_gate.window_sec)
+            _add_mark(session, "login_fail", account, now, now + login_gate.window_sec)
+            if lock_ip:
+                _add_mark(session, "login_fail", key, now, now + login_gate.window_sec)
             write_audit(session, "login_fail", detail=(username or "")[:64], request=request)
             session.commit()
     except Exception:
         log.exception("login failure persist failed")
 
 
-def password_change_blocked(user_id: int) -> bool:
+def password_lock_wait(user_id: int) -> int:
     from app.security import password_gate
 
-    return password_gate.blocked(f"pwd:{int(user_id)}")
+    return password_gate.retry_after(f"pwd:{int(user_id)}")
 
 
 def note_password_failure(user_id: int, request: Request | None = None) -> None:
@@ -187,18 +203,51 @@ def clear_password_failures(user_id: int) -> None:
         log.exception("password failure clear failed")
 
 
-def clear_login_failures(key: str) -> None:
+def clear_all_login_locks() -> int:
     from app.models import SecurityMark
     from app.security import login_gate
 
-    login_gate.ok(key)
+    login_gate.clear()
+    lock, factory = _mark_session()
+    with lock, factory() as session:
+        removed = session.query(SecurityMark).filter(SecurityMark.kind == "login_fail").delete()
+        session.commit()
+        return int(removed or 0)
+
+
+def clear_login_failures(*keys: str) -> None:
+    from app.models import SecurityMark
+    from app.security import login_gate
+
+    subjects: list[str] = []
+    for key in keys:
+        if not key:
+            continue
+        login_gate.ok(key)
+        subjects.append(key[:80])
+    if not subjects:
+        return
     try:
         lock, factory = _mark_session()
         with lock, factory() as session:
-            session.query(SecurityMark).filter(SecurityMark.kind == "login_fail", SecurityMark.subject == key[:80]).delete()
+            session.query(SecurityMark).filter(
+                SecurityMark.kind == "login_fail",
+                SecurityMark.subject.in_(subjects),
+            ).delete(synchronize_session=False)
             session.commit()
     except Exception:
         log.exception("login failure clear failed")
+
+
+def retire_idle_tokens(user_id: int) -> None:
+    """Простой гасит токены отдельной транзакцией: ответ 401 иначе откатит смену версии."""
+    lock, factory = _mark_session()
+    with lock, factory() as session:
+        row = session.get(User, int(user_id))
+        if row is None:
+            return
+        row.token_version = int(row.token_version or 1) + 1
+        session.commit()
 
 
 def restore_persisted_guards() -> None:

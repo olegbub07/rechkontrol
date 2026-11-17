@@ -13,6 +13,7 @@ def test_username_rules():
 
 def test_password_policy():
     assert validate_password("GoodPass12!", "ivan") == "GoodPass12!"
+    assert validate_password("Ёлка-тест12", "ivan") == "Ёлка-тест12"
     with pytest.raises(PasswordError):
         validate_password("GoodPass12", "ivan")
     with pytest.raises(PasswordError):

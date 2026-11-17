@@ -8,13 +8,13 @@
 Authorization: Bearer <token>
 ```
 
-Токен выдаётся на 12 часов (`JWT_TTL_HOURS`). Ответы API не кэшируются (`Cache-Control: no-store`). Документация OpenAPI (`/docs`) включена только при `APP_DEBUG=true`.
+Токен выдаётся на 12 часов (`JWT_TTL_HOURS`). Без запросов 15 минут сессия закрывается: ответ 401 «Сессия закрыта из-за простоя», токены учётки гасятся. Пока идут запросы, отметка активности обновляется не чаще раза в минуту. Ответы API не кэшируются (`Cache-Control: no-store`). Документация OpenAPI (`/docs`) включена только при `APP_DEBUG=true`.
 
 ## Служебные
 
 | Метод | Путь | Описание |
 |---|---|---|
-| GET | `/health` | статус, офлайн-модель, длина очереди |
+| GET | `/health` | только `{"status":"ok"}`. Очередь и модель — в кабинете после входа |
 
 ## Авторизация
 
@@ -25,7 +25,7 @@ Authorization: Bearer <token>
 | GET | `/auth/me` | — | текущий пользователь, поле `must_change_password` |
 | POST | `/auth/password` | `{ "old_password", "new_password" }` | новый токен; старые сессии закрыты |
 
-После 8 неудачных попыток входа с одного IP вход блокируется на 15 минут. Отключённая учётка отвечает тем же текстом, что и неверный пароль. После 8 неверных старых паролей смена пароля блокируется на 15 минут.
+После 8 неудачных попыток входа логин блокируется на 15 минут. На петлевом адресе адрес в этот счётчик не входит. С внешнего адреса дополнительно блокируется адрес. Отключённая учётка отвечает тем же текстом, что и неверный пароль. После 8 неверных старых паролей смена пароля блокируется на 15 минут.
 
 Пока `must_change_password` истинно, открыты только `/auth/me`, `/auth/password` и `/auth/logout`. Остальное — 403 «Смените стартовый пароль».
 
@@ -53,8 +53,9 @@ Authorization: Bearer <token>
 |---|---|---|
 | GET | `/operators` | список со средним качеством |
 | POST | `/operators` | `{ "name", "external_id" }` |
-| GET | `/settings` | модель, лимиты, фразы скрипта |
-| PUT | `/settings` | `{ "company_phrases", "extra_script_phrases" }` |
+| GET | `/script` | памятка: шаги разговора и дополнительные фразы. Доступна оператору. Модели и лимитов в ответе нет |
+| GET | `/settings` | модель, лимиты, фразы скрипта. Оператору закрыто |
+| PUT | `/settings` | `{ "company_phrases", "extra_script_phrases" }`, только администратор |
 | POST | `/analyze-text` | оценка текста без аудио |
 | GET | `/checklist` | чек-лист качества, значения по умолчанию, лимиты (admin, analyst) |
 | PUT | `/checklist` | `{ "criteria": [{ "id", "enabled", "title", "weight", "phrases" }], "category_weights" }`, только admin, 422 при ошибке проверки |
@@ -86,6 +87,23 @@ Authorization: Bearer <token>
 | POST | `/dataset/download` | `{ "limit": 24 }` |
 | POST | `/dataset/evaluate?limit=12` | WER / CER |
 | POST | `/dataset/import?limit=12` | клипы в очередь как обычные звонки |
+
+## Админка
+
+Только `admin`.
+
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/admin/overview` | счётчики людей, звонков, ошибок, аудита и `login_locks` |
+| GET | `/admin/posture` | контур, стартовый пароль, состояние базы |
+| GET | `/admin/users` | люди; у каждой записи `password_attempts` и `password_locked` |
+| POST | `/admin/users` | `{ username, password, role, operator_id? }` |
+| PATCH | `/admin/users/{id}` | `{ role?, is_active?, operator_id? }`. `operator_id: null` снимает карточку, кроме роли оператора |
+| POST | `/admin/users/{id}/password` | новый пароль. Если это вы сами, в ответе есть свежий `token`, эта сессия жива |
+| POST | `/admin/users/{id}/sessions` | закрыть сессии. Для себя в ответе новый `token` |
+| POST | `/admin/users/{id}/unlock` | снять блокировку смены пароля. Себе — 400 |
+| POST | `/admin/locks/login` | снять блокировки входа, ответ `{ "cleared" }` |
+| GET | `/admin/audit` | `page`, `page_size` |
 
 ## Пример входа
 

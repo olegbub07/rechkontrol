@@ -267,6 +267,17 @@ def test_login_reaches_api_and_bootstrap():
             assert client.get("/api/admin/overview", headers=op_headers).status_code == 403
             assert client.get("/api/admin/posture", headers=op_headers).status_code == 403
             assert client.get("/api/settings", headers=op_headers).status_code == 403
+            assert client.put("/api/settings", headers=op_headers, json={"company_phrases": ["чужой"]}).status_code == 403
+            sheet = client.get("/api/script", headers=op_headers)
+            assert sheet.status_code == 200
+            body = sheet.json()
+            assert "whisper_model" not in body
+            assert "max_upload_mb" not in body
+            greeting = next(step for step in body["steps"] if step["title"] == "Приветствие")
+            assert "добрый день" in greeting["examples"]
+            assert "здравстуйте" not in greeting["examples"]
+            company = next(step for step in body["steps"] if step["id"] == "company")
+            assert company["examples"]
             assert client.get("/api/export/csv", headers=op_headers).status_code == 403
             assert client.get("/api/dataset", headers=op_headers).status_code == 403
             own = client.get("/api/calls?page_size=100", headers=op_headers)
@@ -294,14 +305,22 @@ def test_login_reaches_api_and_bootstrap():
 def test_login_lock_and_logout_survive_restart():
     import time
 
-    from app.auth import clear_login_failures, is_revoked, note_login_failure, restore_persisted_guards, revoke_jti
+    from app.auth import (
+        account_lock_key,
+        clear_login_failures,
+        is_revoked,
+        note_login_failure,
+        restore_persisted_guards,
+        revoke_jti,
+    )
     from app.db import SessionLocal
     from app.models import SecurityMark
     from app.security import login_gate
 
     ip = "203.0.113.55"
     jti = "b" * 32
-    clear_login_failures(ip)
+    account = account_lock_key("nobody")
+    clear_login_failures(ip, account)
     try:
         for _ in range(8):
             note_login_failure(ip, "nobody")
@@ -318,7 +337,7 @@ def test_login_lock_and_logout_survive_restart():
         restore_persisted_guards()
         assert is_revoked(jti)
     finally:
-        clear_login_failures(ip)
+        clear_login_failures(ip, account)
         with SessionLocal() as session:
             session.query(SecurityMark).filter(SecurityMark.subject == jti).delete()
             session.commit()
@@ -510,3 +529,207 @@ def test_default_compute_type_is_float32():
     from app.config import Settings
 
     assert Settings(_env_file=None).whisper_compute_type == "float32"
+
+
+def test_admin_password_window_and_desk_controls():
+    from fastapi.testclient import TestClient
+
+    from app.auth import clear_password_failures, hash_password
+    from app.db import SessionLocal
+    from app.main import app
+    from app.models import User
+
+    names = ("qa.desk", "qa.locked")
+    with SessionLocal() as session:
+        session.query(User).filter(User.username.in_(names)).delete(synchronize_session=False)
+        session.add(User(username="qa.desk", password_hash=hash_password("Old-Desk-2026!"), role="admin", is_active=1, token_version=1))
+        session.add(User(username="qa.locked", password_hash=hash_password("Old-Lock-2026!"), role="analyst", is_active=1, token_version=1))
+        session.commit()
+    try:
+        with TestClient(app) as client:
+            desk = client.post("/api/auth/login", json={"username": "qa.desk", "password": "Old-Desk-2026!"})
+            locked = client.post("/api/auth/login", json={"username": "qa.locked", "password": "Old-Lock-2026!"})
+            assert desk.status_code == 200
+            assert locked.status_code == 200
+            desk_headers = {"Authorization": f"Bearer {desk.json()['token']}"}
+            locked_headers = {"Authorization": f"Bearer {locked.json()['token']}"}
+            locked_id = locked.json()["user"]["id"]
+            desk_id = desk.json()["user"]["id"]
+
+            assert client.post(f"/api/admin/users/{locked_id}/unlock", headers=locked_headers).status_code == 403
+            assert client.post(f"/api/admin/users/{locked_id}/sessions", headers=locked_headers).status_code == 403
+            assert client.post("/api/admin/locks/login", headers=locked_headers).status_code == 403
+            assert "login_locks" in client.get("/api/admin/overview", headers=desk_headers).json()
+            assert client.post(f"/api/admin/users/{desk_id}/unlock", headers=desk_headers).status_code == 400
+
+            bad_new = client.post(
+                "/api/auth/password",
+                headers=desk_headers,
+                json={"old_password": "Old-Desk-2026!", "new_password": "WithoutSymbol1"},
+            )
+            assert bad_new.status_code == 400
+            assert "знак" in bad_new.json()["detail"]
+
+            for _ in range(8):
+                attempt = client.post(
+                    "/api/auth/password",
+                    headers=locked_headers,
+                    json={"old_password": "not-the-lock", "new_password": "Whatever-12!"},
+                )
+                assert attempt.status_code == 400
+            blocked = client.post(
+                "/api/auth/password",
+                headers=locked_headers,
+                json={"old_password": "not-the-lock", "new_password": "Whatever-12!"},
+            )
+            assert blocked.status_code == 429
+            assert "Повторите через" in blocked.json()["detail"]
+            people = client.get("/api/admin/users", headers=desk_headers).json()
+            row = next(item for item in people if item["id"] == locked_id)
+            assert row["password_locked"] is True
+            assert client.post(f"/api/admin/users/{locked_id}/unlock", headers=desk_headers).status_code == 200
+            opened = client.post(
+                "/api/auth/password",
+                headers=locked_headers,
+                json={"old_password": "not-the-lock", "new_password": "Whatever-12!"},
+            )
+            assert opened.status_code == 400
+            assert opened.json()["detail"] == "Старый пароль неверен"
+
+            changed = client.post(
+                "/api/auth/password",
+                headers=desk_headers,
+                json={"old_password": "Old-Desk-2026!", "new_password": "New-Desk-2026!"},
+            )
+            assert changed.status_code == 200
+            fresh = {"Authorization": f"Bearer {changed.json()['token']}"}
+            assert client.get("/api/auth/me", headers=desk_headers).status_code == 401
+            assert client.get("/api/auth/me", headers=fresh).status_code == 200
+            assert client.post("/api/auth/login", json={"username": "qa.desk", "password": "Old-Desk-2026!"}).status_code == 401
+            assert client.post("/api/auth/login", json={"username": "qa.desk", "password": "New-Desk-2026!"}).status_code == 200
+
+            reset = client.post(
+                f"/api/admin/users/{desk_id}/password",
+                headers=fresh,
+                json={"password": "Reset-Desk-2026!"},
+            )
+            assert reset.status_code == 200
+            assert reset.json()["token"]
+            kept = {"Authorization": f"Bearer {reset.json()['token']}"}
+            assert client.get("/api/auth/me", headers=fresh).status_code == 401
+            assert client.get("/api/auth/me", headers=kept).status_code == 200
+
+            relog = client.post("/api/auth/login", json={"username": "qa.locked", "password": "Old-Lock-2026!"})
+            assert relog.status_code == 200
+            gone = {"Authorization": f"Bearer {relog.json()['token']}"}
+            assert client.post(f"/api/admin/users/{locked_id}/sessions", headers=kept).status_code == 200
+            assert client.get("/api/auth/me", headers=gone).status_code == 401
+            own = client.post(f"/api/admin/users/{desk_id}/sessions", headers=kept)
+            assert own.status_code == 200 and own.json()["token"]
+            assert client.get("/api/auth/me", headers=kept).status_code == 401
+            assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {own.json()['token']}"}).status_code == 200
+    finally:
+        with SessionLocal() as session:
+            rows = session.query(User).filter(User.username.in_(names)).all()
+            for row in rows:
+                clear_password_failures(row.id)
+                session.delete(row)
+            session.commit()
+
+
+def test_health_hides_runtime_details():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_account_lock_on_loopback_spares_other_logins():
+    from fastapi.testclient import TestClient
+
+    from app.auth import account_lock_key, clear_login_failures, hash_password, note_login_failure
+    from app.db import SessionLocal
+    from app.main import app
+    from app.models import User
+    from app.security import login_gate
+
+    locked_name = "qa.lockme"
+    other_name = "qa.otherlock"
+    account = account_lock_key(locked_name)
+    clear_login_failures("127.0.0.1", account, account_lock_key(other_name))
+    with SessionLocal() as session:
+        session.query(User).filter(User.username.in_((locked_name, other_name))).delete(synchronize_session=False)
+        session.add(User(username=locked_name, password_hash=hash_password("Lock-Me-2026!"), role="analyst", is_active=1, token_version=1))
+        session.add(User(username=other_name, password_hash=hash_password("Other-Lock-2026!"), role="analyst", is_active=1, token_version=1))
+        session.commit()
+    try:
+        for _ in range(8):
+            note_login_failure("127.0.0.1", locked_name, None)
+        assert login_gate.blocked(account)
+        assert not login_gate.blocked("127.0.0.1")
+        with TestClient(app) as client:
+            denied = client.post("/api/auth/login", json={"username": locked_name, "password": "Lock-Me-2026!"})
+            other = client.post("/api/auth/login", json={"username": other_name, "password": "Other-Lock-2026!"})
+        assert denied.status_code == 429
+        assert denied.json()["detail"] == "Слишком много попыток входа. Подождите несколько минут."
+        assert other.status_code == 200
+    finally:
+        clear_login_failures("127.0.0.1", account, account_lock_key(other_name))
+        with SessionLocal() as session:
+            session.query(User).filter(User.username.in_((locked_name, other_name))).delete(synchronize_session=False)
+            session.commit()
+
+
+def test_idle_session_requires_login_again():
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import hash_password
+    from app.db import SessionLocal
+    from app.main import app
+    from app.models import User
+
+    name = "qa.idle"
+    with SessionLocal() as session:
+        session.query(User).filter(User.username == name).delete(synchronize_session=False)
+        session.add(User(username=name, password_hash=hash_password("Idle-Wait-2026!"), role="analyst", is_active=1, token_version=1))
+        session.commit()
+    try:
+        with TestClient(app) as client:
+            login = client.post("/api/auth/login", json={"username": name, "password": "Idle-Wait-2026!"})
+            assert login.status_code == 200
+            token = login.json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            assert client.get("/api/auth/me", headers=headers).status_code == 200
+            with SessionLocal() as session:
+                row = session.query(User).filter(User.username == name).one()
+                row.last_seen_at = int(time.time()) - 1000
+                session.commit()
+            stale = client.get("/api/auth/me", headers=headers)
+            assert stale.status_code == 401
+            assert "просто" in stale.json()["detail"]
+            assert client.get("/api/auth/me", headers=headers).status_code == 401
+            again = client.post("/api/auth/login", json={"username": name, "password": "Idle-Wait-2026!"})
+            assert again.status_code == 200
+            assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {again.json()['token']}"}).status_code == 200
+            assert client.get("/api/auth/me", headers=headers).status_code == 401
+    finally:
+        with SessionLocal() as session:
+            session.query(User).filter(User.username == name).delete(synchronize_session=False)
+            session.commit()
+
+
+def test_stream_token_length_is_capped(tmp_path):
+    from app.crypto import STREAM_MAGIC, _iter_stream_tokens
+
+    path = tmp_path / "bad.bin"
+    path.write_bytes(STREAM_MAGIC + (5 * 1024 * 1024).to_bytes(4, "big") + b"xxxx")
+    with path.open("rb") as fh:
+        fh.read(len(STREAM_MAGIC))
+        with pytest.raises(ValueError):
+            next(_iter_stream_tokens(fh))

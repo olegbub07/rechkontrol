@@ -86,10 +86,12 @@ def verify_model(path) -> None:
 
 def _download(path) -> None:
     import urllib.request
+    from urllib.parse import urlparse
 
     url = settings.demo_voice_model_url
-    if not url.startswith("https://"):
-        raise RuntimeError("Модель голоса скачивается только по https")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "") != "models.silero.ai" or parsed.username or parsed.password:
+        raise RuntimeError("Модель голоса скачивается только с https://models.silero.ai")
     log.info("Скачиваю русскую модель голоса для прослушивания демо-звонков")
     tmp = path.with_suffix(".part")
     try:

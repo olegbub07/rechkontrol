@@ -46,7 +46,7 @@ def validate_password(password: str, username: str = "") -> str:
         raise PasswordError("Пароль не должен совпадать с логином")
     if password.lower() in WEAK:
         raise PasswordError("Пароль слишком простой")
-    if not re.search(r"[A-Za-zА-Яа-я]", password):
+    if not re.search(r"[A-Za-zА-Яа-яЁё]", password):
         raise PasswordError("В пароле нужна хотя бы одна буква")
     if not re.search(r"\d", password):
         raise PasswordError("В пароле нужна хотя бы одна цифра")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.timeutil import utcnow
@@ -19,6 +19,7 @@ class User(Base):
     is_active: Mapped[int] = mapped_column(Integer, default=1)
     token_version: Mapped[int] = mapped_column(Integer, default=1)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("operators.id"), nullable=True)
     must_change_password: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

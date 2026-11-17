@@ -90,7 +90,7 @@
           <div class="who">
             <span class="avatar" id="who-av">•</span>
             <span id="who-name"></span>
-            <button id="account" class="btn ghost" type="button">Пароль</button>
+            <button id="account" class="btn account" type="button">Сменить пароль</button>
             <button id="logout" class="btn ghost" type="button">Выйти</button>
           </div>
         </div>
@@ -101,15 +101,23 @@
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <dialog id="account-dialog" class="modal">
-    <form id="pwd-self">
+    <form id="pwd-self" novalidate>
       <p class="eyebrow">Учётная запись</p>
       <h2>Сменить пароль</h2>
-      <p class="muted">После сохранения старые сессии этого пользователя закрываются.</p>
-      <label>Текущий пароль <input name="old_password" type="password" required autocomplete="current-password" /></label>
-      <label>Новый пароль <input name="new_password" type="password" required minlength="10" maxlength="128" autocomplete="new-password" /></label>
-      <p class="hint">От 10 символов, буква, цифра и символ. Не используйте пароль из инструкции.</p>
+      <p class="muted">Введите пароль, с которым вы вошли. Браузер может подставить другой в поле «текущий» — проверьте его. После сохранения остальные сессии закроются, эта останется.</p>
+      <label>Текущий пароль <input name="old_password" type="password" autocomplete="current-password" maxlength="128" /></label>
+      <label>Новый пароль <input name="new_password" id="pwd-new" type="password" autocomplete="new-password" maxlength="128" /></label>
+      <label>Повторите новый пароль <input name="confirm_password" type="password" autocomplete="new-password" maxlength="128" /></label>
+      <ul class="pw-rules" id="self-pw-rules">
+        <li data-rule="len">от 10 символов</li>
+        <li data-rule="letter">есть буква</li>
+        <li data-rule="digit">есть цифра</li>
+        <li data-rule="symbol">есть символ</li>
+      </ul>
+      <label class="flex-check"><input id="pwd-reveal" type="checkbox" /> показать пароли</label>
+      <p class="form-error" id="pwd-error" hidden></p>
       <div class="toolbar">
-        <button class="btn primary row" type="submit">Сохранить</button>
+        <button class="btn primary row" type="submit" id="pwd-save">Сохранить пароль</button>
         <button class="btn ghost row" id="pwd-cancel" type="button">Закрыть</button>
       </div>
     </form>
