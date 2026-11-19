@@ -10,6 +10,7 @@
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Оценка качества](docs/QUALITY.md)
 - [HTTP API](docs/API.md)
+- [Интеграции: папка входящих, REST API по ключу, вебхуки](docs/INTEGRATION.md)
 - [Безопасность](docs/SECURITY.md)
 - [Запуск и разработка](docs/RUN.md)
 - [Скорость на длинных звонках](docs/PERFORMANCE.md)
@@ -28,6 +29,7 @@
 | KPI в CSV/JSON | нарушения, время ответа, тональность, дата, ID оператора |
 | 10 минут записи ≤ 3-5 минут обработки | `small` + `float32`, VAD, пакетная расшифровка длинных файлов. Замер: 10,7 мин за 51,4 с на ноутбуке (docs/PERFORMANCE.md) |
 | Очередь | `queued → processing → done` |
+| Интеграции | папка входящих (`INBOX_DIR`), REST API `/api/v1` по API-ключу, вебхуки с подписью HMAC-SHA256, см. [docs/INTEGRATION.md](docs/INTEGRATION.md) |
 
 ## Быстрый старт
 

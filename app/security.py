@@ -36,6 +36,8 @@ CSP = (
 
 
 def request_body_limit(path: str) -> int:
+    if path.rstrip("/") == "/api/v1/calls":
+        return (max(1, int(settings.max_upload_mb)) + 8) * 1024 * 1024
     if path.startswith("/api/calls/upload"):
         files = max(1, int(settings.max_upload_files))
         mb = max(1, int(settings.max_upload_mb))
@@ -114,7 +116,7 @@ class SecurityHeadersMiddleware:
                 return
         incoming = receive
         if raw_length is None and method not in {"GET", "HEAD", "OPTIONS"}:
-            if path.startswith("/api/calls/upload"):
+            if path.startswith("/api/calls/upload") or path.rstrip("/") == "/api/v1/calls":
                 incoming = _capped_receive(receive, limit)
             else:
                 body, too_big = await _buffer_body(receive, limit)

@@ -1509,6 +1509,100 @@ function keepSession(out) {
   if (out.username) state.user = out;
 }
 
+function integrationsCard(integ) {
+  const keys = integ.keys || [];
+  const rows = keys.length
+    ? keys.map((k) => `<tr>
+        <td>${escapeHtml(k.name)}</td><td><code>${escapeHtml(k.prefix)}</code></td>
+        <td>${escapeHtml((k.scopes || []).join(", "))}</td>
+        <td>${k.revoked ? "отозван" : "активен"}</td>
+        <td>${k.last_used_at ? escapeHtml(k.last_used_at.slice(0, 16).replace("T", " ")) : "не использовался"}</td>
+        <td>${k.revoked ? "" : `<button class="btn ghost" type="button" data-revoke-key="${k.id}">Отозвать</button>`}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="6">Ключей пока нет.</td></tr>`;
+  const deliveries = integ.deliveries || [];
+  const drows = deliveries.length
+    ? deliveries.map((d) => `<tr>
+        <td>${escapeHtml((d.created_at || "").slice(0, 16).replace("T", " "))}</td><td>№${d.call_id ?? ""}</td>
+        <td>${escapeHtml(d.url)}</td><td>${escapeHtml(d.status)}</td><td>${d.attempts}</td>
+        <td>${escapeHtml(d.last_code ?? d.last_error ?? "")}</td>
+        <td>${d.status === "failed" ? `<button class="btn ghost" type="button" data-retry-delivery="${d.id}">Повторить</button>` : ""}</td>
+      </tr>`).join("")
+    : `<tr><td colspan="7">Доставок пока не было.</td></tr>`;
+  const wh = integ.webhooks || {};
+  const inbox = integ.inbox || {};
+  return `<div class="card mt" id="integrations">
+      <h2>Интеграции</h2>
+      <p class="muted">Папка входящих: ${inbox.enabled ? `<code>${escapeHtml(inbox.dir)}</code>, проверка каждые ${inbox.poll_sec} с` : "выключена (INBOX_DIR)"}.
+      Вебхуки: ${wh.enabled ? `${(wh.urls || []).length} адрес(ов)${wh.only_violations ? ", только с нарушениями" : ""}` : wh.urls?.length && !wh.secret_set ? "не отправляются: не задан WEBHOOK_SECRET" : "выключены (WEBHOOK_URLS)"}.
+      Описание API: <a href="/docs" target="_blank" rel="noopener">/docs</a> (при API_DOCS=true).</p>
+      <h3>API-ключи</h3>
+      <form id="apikey-form" class="toolbar">
+        <label class="grow">Название <input name="name" required minlength="2" maxlength="80" placeholder="CRM, АТС, BI" /></label>
+        <label><input type="checkbox" name="read" checked /> чтение</label>
+        <label><input type="checkbox" name="write" checked /> загрузка</label>
+        <button class="btn primary row" type="submit">Создать ключ</button>
+      </form>
+      <div id="apikey-new" class="mt" hidden></div>
+      <div class="table-scroll desk"><table>
+        <thead><tr><th>Название</th><th>Ключ</th><th>Права</th><th>Статус</th><th>Последний запрос</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <h3 class="mt">Доставка вебхуков</h3>
+      <div class="table-scroll desk"><table>
+        <thead><tr><th>Когда</th><th>Звонок</th><th>Адрес</th><th>Статус</th><th>Попыток</th><th>Ответ</th><th></th></tr></thead>
+        <tbody>${drows}</tbody>
+      </table></div>
+    </div>`;
+}
+
+function bindIntegrations(view) {
+  const form = $("#apikey-form");
+  if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const scopes = [];
+    if (form.read.checked) scopes.push("calls:read");
+    if (form.write.checked) scopes.push("calls:write");
+    if (!scopes.length) {
+      toast("Выберите хотя бы одно право", true);
+      return;
+    }
+    try {
+      const out = await api("/admin/integrations/keys", { method: "POST", json: { name: form.name.value, scopes } });
+      const box = $("#apikey-new");
+      box.hidden = false;
+      box.innerHTML = `<p><b>Ключ «${escapeHtml(out.name)}» создан.</b> Скопируйте его сейчас, повторно он не показывается:</p><pre class="secret">${escapeHtml(out.key)}</pre>`;
+      form.reset();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  $$("[data-revoke-key]", view).forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Отозвать ключ? Система, которая им пользуется, сразу потеряет доступ.")) return;
+      try {
+        await api(`/admin/integrations/keys/${b.dataset.revokeKey}`, { method: "DELETE" });
+        toast("Ключ отозван");
+        await renderAdmin(view);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  });
+  $$("[data-retry-delivery]", view).forEach((b) => {
+    b.onclick = async () => {
+      try {
+        await api(`/admin/integrations/deliveries/${b.dataset.retryDelivery}/retry`, { method: "POST" });
+        toast("Доставка поставлена на повтор");
+        b.disabled = true;
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  });
+}
+
 async function renderAdmin(view) {
   if (state.user?.role !== "admin") {
     location.hash = "#/";
@@ -1531,6 +1625,12 @@ async function renderAdmin(view) {
   } catch (err) {
     view.innerHTML = `<div class="card featured"><h2>Админка недоступна</h2><p>${escapeHtml(err.message)}</p></div>`;
     return;
+  }
+  let integ = null;
+  try {
+    integ = await api("/admin/integrations");
+  } catch (_err) {
+    integ = null;
   }
   const auditRows = audit.items || [];
   const auditTotal = audit.total || auditRows.length;
@@ -1610,6 +1710,7 @@ async function renderAdmin(view) {
         <li data-rule="symbol">есть символ</li>
       </ul>
     </div>
+    ${integ ? integrationsCard(integ) : ""}
     <div class="card mt">
       <div class="toolbar">
         <h2 class="inline-title">Журнал аудита</h2>
@@ -1772,6 +1873,7 @@ async function renderAdmin(view) {
     });
   };
   if (auditQ) auditQ.oninput = filterAudit;
+  bindIntegrations(view);
   const more = $("#audit-more");
   let auditPage = 1;
   if (more) {

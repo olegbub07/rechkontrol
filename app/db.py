@@ -154,6 +154,8 @@ def _migrate() -> None:
         ("users", "must_change_password", "INTEGER DEFAULT 0"),
         ("calls", "flagged", "INTEGER DEFAULT 0"),
         ("calls", "review_note", "TEXT"),
+        ("calls", "source", "VARCHAR(16)"),
+        ("calls", "source_ref", "VARCHAR(64)"),
     )
     with engine.begin() as conn:
         inspector = inspect(conn)

@@ -12,6 +12,7 @@ from app.config import settings
 from app.crypto import decrypt_file
 from app.db import SessionLocal, write_lock
 from app.diarize import from_whisper
+from app.webhooks import notify_processed
 from app.models import Call, Quality, Transcript
 from app.llm import enrich as llm_enrich
 from app.quality import analyze, report_to_json
@@ -53,6 +54,7 @@ def _touch_progress(call_id: int, value: int) -> None:
 
 def process_call(call_id: int) -> None:
     started = time.time()
+    finished = False
     tmp_src: Path | None = None
     tmp_wav: Path | None = None
     with write_lock, SessionLocal() as session:
@@ -157,6 +159,7 @@ def process_call(call_id: int) -> None:
             call.error_message = None
             session.commit()
             log.info("call %s done in %.1fs, overall=%.1f", call_id, call.processed_sec, report.overall)
+            finished = True
     except Exception as exc:
         log.exception("call %s failed", call_id)
         with write_lock, SessionLocal() as session:
@@ -169,10 +172,13 @@ def process_call(call_id: int) -> None:
             else:
                 call.error_message = "Обработка не удалась. Проверьте файл и повторите попытку."
             session.commit()
+            finished = True
     finally:
         for item in (tmp_src, tmp_wav):
             if item is not None:
                 item.unlink(missing_ok=True)
+        if finished:
+            notify_processed(call_id)
 
 
 def _loop() -> None:

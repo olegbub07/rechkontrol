@@ -81,6 +81,9 @@ class Call(Base):
     operator_first: Mapped[int] = mapped_column(Integer, default=1)
     flagged: Mapped[int] = mapped_column(Integer, default=0)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Откуда пришёл звонок: upload | inbox | api, и SHA-256 исходного файла (повторно не ставится в очередь).
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     operator: Mapped[Operator | None] = relationship(back_populates="calls")
     transcript: Mapped[Transcript | None] = relationship(back_populates="call", uselist=False, cascade="all, delete-orphan")
@@ -151,3 +154,39 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     detail: Mapped[str] = mapped_column(Text, default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
+
+
+class ApiKey(Base):
+    """Ключ внешней системы. Хранится только SHA-256 ключа, сам ключ показывается один раз."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    key_hash: Mapped[str] = mapped_column(String(64))
+    scopes: Mapped[str] = mapped_column(String(120), default="calls:read")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WebhookDelivery(Base):
+    """Журнал доставки вебхуков: одна строка на событие и адрес, с повторами."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event: Mapped[str] = mapped_column(String(40))
+    call_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    # В теле оценки и имя оператора, поэтому шифруется как расшифровки.
+    payload: Mapped[str] = mapped_column(EncryptedText, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_try_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    last_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

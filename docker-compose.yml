@@ -67,6 +67,13 @@ services:
       # Поэтому для него снят запрет на нелокальный адрес.
       OLLAMA_URL: http://ollama:11434
       LLM_ALLOW_REMOTE: "true"
+      # Интеграции (docs/INTEGRATION.md). Папку входящих пробрасывайте томом в override-файле.
+      INBOX_DIR: ${INBOX_DIR:-}
+      API_DOCS: ${API_DOCS:-false}
+      WEBHOOK_URLS: ${WEBHOOK_URLS:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      WEBHOOK_ONLY_VIOLATIONS: ${WEBHOOK_ONLY_VIOLATIONS:-false}
+      WEBHOOK_VIOLATION_IDS: ${WEBHOOK_VIOLATION_IDS:-}
     volumes:
       # JWT-секрет, зашифрованное аудио, модели Whisper и стартовые пароли.
       # Именованный том, а не ./data: каталог ./data Docker создал бы от root,

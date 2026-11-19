@@ -78,6 +78,28 @@ class Settings(BaseSettings):
     retention_check_hours: float = 6.0
     # Часовой пояс для показа времени в журнале аудита (в базе время хранится в UTC).
     display_tz: str = "Europe/Moscow"
+    # ---- Интеграции (docs/INTEGRATION.md). Всё работает внутри контура. ----
+    # Папка входящих: новые аудиофайлы из неё забираются в очередь. Пусто - выключено.
+    inbox_dir: str = ""
+    inbox_poll_sec: float = 5.0
+    # Файл берётся, только если его размер не менялся столько секунд (защита от недописанных файлов).
+    inbox_settle_sec: float = 3.0
+    # Оставлять исходник в inbox/done. false - удалять после того, как он зашифрован в хранилище.
+    inbox_keep_originals: bool = True
+    inbox_operator_first: bool = True
+    # Показывать /docs и /openapi.json без APP_DEBUG (описание REST API для внешних систем).
+    api_docs: bool = False
+    # Вебхуки: адреса через запятую, общий секрет для подписи HMAC-SHA256.
+    webhook_urls: str = ""
+    webhook_secret: str = ""
+    # Слать только звонки с нарушениями. WEBHOOK_VIOLATION_IDS сужает список (например no_rudeness,no_tutoyage).
+    webhook_only_violations: bool = False
+    webhook_violation_ids: str = ""
+    webhook_max_attempts: int = 6
+    webhook_backoff_sec: float = 30.0
+    webhook_timeout_sec: float = 10.0
+    # По умолчанию вебхук уходит только на адреса внутри сети (частные IP и localhost).
+    webhook_allow_public: bool = False
     allowed_audio_ext: tuple[str, ...] = (".wav", ".mp3", ".ogg", ".oga", ".flac", ".m4a")
 
     @property
