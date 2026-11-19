@@ -41,3 +41,6 @@ docker compose up -d
 ## Модели без интернета
 
 `python scripts/download_models.py --dir ПАПКА` скачивает Whisper (`WHISPER_MODEL`) и e5 в одну папку. Её содержимое кладётся в `data\models` на сервере.
+
+
+Пошаговая инструкция по сборке с моделями и переносу на сервер без интернета: [MODELS_OFFLINE.md](MODELS_OFFLINE.md).

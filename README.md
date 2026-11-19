@@ -95,3 +95,7 @@ python -m app.dataset
 ```
 
 Тесты не требуют модель Whisper.
+
+## Сервер без интернета
+
+Пошаговая инструкция: [docs/MODELS_OFFLINE.md](docs/MODELS_OFFLINE.md).
