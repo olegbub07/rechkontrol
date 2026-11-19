@@ -583,6 +583,273 @@ def voice_turns(words: list[dict], audio: np.ndarray, sr: int, operator_first: b
     return merge_same_role([t for t in out if t["text"]], max_gap=3.5)
 
 
+# ---------- Моно без уверенного голоса: диалог по смыслу и паузам ----------
+# Запись с телефона часто одноканальная, а голоса по MFCC делятся слабо. Раньше
+# тогда куски резались по тишине и роли чередовались по паузам, и смена говорящего
+# внутри куска Whisper терялась: начало реплики приклеивалось к концу чужой.
+# Здесь каждая фраза получает «голос» за оператора или клиента по подсказкам,
+# а каждая граница между фразами получает цену смены говорящего (вопрос и ответ,
+# пауза, обрыв на середине предложения). Лучшую разметку ищем Витерби.
+# Слова только для моно: на стерео они не влияют.
+
+MONO_OPERATOR_CUES = (
+    "да, конечно",
+    "да конечно",
+    "подскажите, пожалуйста, номер",
+    "подскажите номер",
+    "номер вашей",
+    "номер вашего",
+    "вашей карты",
+    "ваша карта",
+    "вашу карту",
+    "ваш номер",
+    "ваш договор",
+    "ваши данные",
+    "нашел вас",
+    "нашла вас",
+    "вижу вас",
+    "вижу ваш",
+    "блокирую",
+    "заблокирую",
+    "была заблокирована",
+    "заблокирована",
+    "ожидайте",
+    "оставайтесь на линии",
+    "одну минуту",
+    "минуточку",
+    "еще вопросы",
+    "ещё вопросы",
+    "вопросы остались",
+    "остались вопросы",
+    "что-то еще",
+    "проверяю",
+    "чем могу",
+    # грубость, которую говорит оператор (за неё его и штрафуют)
+    "не наша проблема",
+    "не моя проблема",
+    "сами виноваты",
+    "сами разбирайтесь",
+    "не тупите",
+    "читайте договор",
+    "это к нам не относится",
+    "не туда попали",
+    "вам на горячую линию",
+    "не ваше дело",
+    "что вы от меня хотите",
+    "у меня очередь",
+)
+
+MONO_CLIENT_CUES = (
+    "потерял",
+    "потеряла",
+    "помогите",
+    "украли",
+    "заблокируйте",
+    "моя карта",
+    "мою карту",
+    "моей карты",
+    "мне нужно",
+    "мне надо",
+    "я хотел",
+    "я хотела",
+    "почему так долго",
+    "сколько ждать",
+    "вы груб",
+    "грубите",
+    "груба",
+    "хамите",
+    "жалоб",
+    "не могу",
+    "не приходит",
+    "списали",
+    "буду жаловаться",
+    "мои деньги",
+    "я ничего не",
+)
+
+_ANSWER_START = re.compile(r"^(да|нет|конечно|хорошо|ага|угу|ну|так|ладно|верно)\b")
+_DIGITS_ONLY = re.compile(r"^[\d\s,.\-–xх*]+$")
+_WORD_RE = re.compile(r"[a-zа-я0-9]+")
+
+
+def _plain_words(text: str) -> list[str]:
+    return _WORD_RE.findall(normalize(text))
+
+
+def _is_echo_question(text: str, prev_text: str) -> bool:
+    """«Номер карты?» в ответ на «подскажите номер карты?»: переспрос, а не новый вопрос."""
+    ws = _plain_words(text)
+    prev = set(_plain_words(prev_text))
+    if not ws or not text.strip().endswith("?"):
+        return False
+    # «Номер карты?» целиком повторяет чужие слова; «Как что?» короткий и цепляется за чужое слово
+    return (len(ws) <= 4 and all(w in prev for w in ws)) or (len(ws) <= 2 and any(w in prev for w in ws))
+
+
+def _unit_bias(text: str) -> float:
+    """> 0: похоже на оператора, < 0: на клиента."""
+    n = normalize(text)
+    op = _cue_score(n, OPERATOR_CUES) + _cue_score(n, MONO_OPERATOR_CUES)
+    cl = _cue_score(n, CLIENT_CUES) + _cue_score(n, MONO_CLIENT_CUES)
+    score = 1.6 * op - 1.6 * cl
+    if _DIGITS_ONLY.match(n) and any(ch.isdigit() for ch in n):
+        score -= 0.6  # цифры обычно диктует клиент
+    return score
+
+
+def _switch_score(
+    prev: list[dict],
+    cur: list[dict],
+    prev_prev: list[dict] | None,
+    silence: float | None = None,
+) -> float:
+    """Чем больше, тем вероятнее, что cur говорит другой человек."""
+    prev_text = _join_words(prev)
+    cur_text = _join_words(cur)
+    gap = float(cur[0]["start"]) - float(prev[-1]["end"])
+    pause = max(gap, silence or 0.0)
+    score = -0.5  # при прочих равных говорящий не меняется
+    finished = bool(_SENT_END.search((prev[-1].get("text") or "").strip()))
+    question = prev_text.endswith("?") and not (
+        prev_prev is not None and _is_echo_question(prev_text, _join_words(prev_prev))
+    )
+    if not finished:
+        # После запятой фраза точно продолжается. Без знака вовсе Whisper мог
+        # просто потерять пунктуацию на длинном куске, так что штраф меньше.
+        score -= 3.0 if (prev[-1].get("text") or "").strip().endswith((",", ":", ";", "-")) else 1.0
+    if question:
+        score += 2.5  # на вопрос отвечает другой
+    if "seg" in prev[-1] and "seg" in cur[0]:
+        score += 1.0 if prev[-1]["seg"] != cur[0]["seg"] else -1.5  # Whisper сам начал новый кусок
+    if pause >= 1.0:
+        score += 2.0
+    elif pause >= 0.6:
+        score += 1.5
+    elif not question:
+        score -= 1.5 if pause < 0.3 else 1.0
+    if pause >= 0.3 and _ANSWER_START.match(normalize(cur_text)):
+        score += 1.5
+    if finished and not question and re.match(r"^а\s", normalize(cur_text)) and cur_text.endswith("?"):
+        score += 1.5  # «А ...?» после чужого ответа: встречный вопрос, обычно другой человек
+    if _DIGITS_ONLY.match(normalize(prev_text)) and _DIGITS_ONLY.match(normalize(cur_text)):
+        score -= 3.0  # диктовка цифр продолжается
+    return score
+
+
+def _gap_silence(quiet: np.ndarray, step: float, end: float, start: float, stretch: float = 0.3) -> float:
+    a = max(0, int((end - stretch) / step))
+    b = min(len(quiet), int((start + stretch) / step) + 1)
+    best = run = 0
+    for q in quiet[a:b]:
+        run = run + 1 if q else 0
+        best = max(best, run)
+    return best * step
+
+
+def _viterbi_roles(bias: list[float], switch: list[float], first_op: float) -> list[int]:
+    """1 = оператор, 0 = клиент. bias[i] за оператора, switch[i] за смену между i-1 и i."""
+    n = len(bias)
+    score = [[0.0, 0.0] for _ in range(n)]
+    back = [[0, 0] for _ in range(n)]
+    score[0][1] = bias[0] / 2 + first_op
+    score[0][0] = -bias[0] / 2 - first_op
+    for i in range(1, n):
+        for s in (0, 1):
+            emit = bias[i] / 2 if s == 1 else -bias[i] / 2
+            stay = score[i - 1][s] - switch[i] / 2
+            move = score[i - 1][1 - s] + switch[i] / 2
+            if stay >= move:
+                score[i][s], back[i][s] = stay + emit, s
+            else:
+                score[i][s], back[i][s] = move + emit, 1 - s
+    state = 1 if score[-1][1] >= score[-1][0] else 0
+    path = [state]
+    for i in range(n - 1, 0, -1):
+        state = back[i][state]
+        path.append(state)
+    return path[::-1]
+
+
+def dialog_turns(
+    words: list[dict],
+    audio: np.ndarray | None = None,
+    sr: int | None = None,
+    operator_first: bool = True,
+) -> list[dict]:
+    """Моно-разметка по фразам: смена говорящего может быть и внутри куска Whisper."""
+    clean = [w for w in words if (w.get("text") or "").strip()]
+    if not clean:
+        return []
+    pauses = _silences(audio, sr) if audio is not None and sr else None
+    units = _phrase_units(clean, pauses=pauses)
+    bias = [_unit_bias(_join_words(u)) for u in units]
+    voice = _weak_voice_bias(units, audio, sr) if audio is not None and sr else None
+    quiet, step = _quiet_frames(audio, sr) if audio is not None and sr else (None, 0.02)
+    switch = [0.0]
+    for i in range(1, len(units)):
+        sil = None
+        if quiet is not None and len(quiet):
+            sil = _gap_silence(quiet, step, float(units[i - 1][-1]["end"]), float(units[i][0]["start"]))
+        switch.append(_switch_score(units[i - 1], units[i], units[i - 2] if i >= 2 else None, sil))
+    first_op = 2.0 if operator_first else -2.0
+    path = _viterbi_roles(bias, switch, first_op)
+    if voice is not None:
+        # Голос сам по себе ненадёжен, но ориентируем его по текстовой разметке
+        # и добавляем как слабую подсказку, если он с ней в основном согласен.
+        sign = voice_orientation(voice, path)
+        if sign:
+            mixed = [b + sign * v for b, v in zip(bias, voice)]
+            path = _viterbi_roles(mixed, switch, first_op)
+    out: list[dict] = []
+    for u, st in zip(units, path):
+        text = _join_words(u)
+        if not text:
+            continue
+        role = "operator" if st == 1 else "client"
+        out.append(
+            {
+                "start": float(u[0]["start"]),
+                "end": float(u[-1]["end"]),
+                "text": text,
+                "role": role,
+                "speaker": "A" if role == "operator" else "B",
+                "source": "dialog",
+            }
+        )
+    return merge_same_role(out, max_gap=3.5)
+
+
+VOICE_HINT = 1.0  # вес голоса в моно-разметке по диалогу
+VOICE_HINT_AGREE = 0.6  # минимум согласия голоса с текстом, чтобы ему верить
+
+
+def _weak_voice_bias(units: list[list[dict]], audio: np.ndarray, sr: int) -> list[float] | None:
+    feats = [voice_features(audio, sr, u[0]["start"], u[-1]["end"]) for u in units]
+    idx = [i for i, f in enumerate(feats) if f is not None]
+    if len(idx) < VOICE_MIN_UNITS:
+        return None
+    labels, _ = _two_means(np.array([feats[i] for i in idx]))
+    if labels.min() == labels.max():
+        return None
+    out = [0.0] * len(units)
+    for i, lab in zip(idx, labels):
+        out[i] = VOICE_HINT if lab == 1 else -VOICE_HINT
+    return out
+
+
+def voice_orientation(voice: list[float], path: list[int]) -> int:
+    """+1, если кластер «1» совпадает с оператором, -1 если наоборот, 0 если голос не помогает."""
+    pairs = [(v > 0, p == 1) for v, p in zip(voice, path) if v != 0]
+    if len(pairs) < VOICE_MIN_UNITS:
+        return 0
+    agree = sum(1 for a, b in pairs if a == b) / len(pairs)
+    if agree >= VOICE_HINT_AGREE:
+        return 1
+    if agree <= 1 - VOICE_HINT_AGREE:
+        return -1
+    return 0
+
+
 def from_whisper(
     raw_segments: list[dict],
     operator_first: bool = True,
@@ -592,7 +859,7 @@ def from_whisper(
     operator_channel: str = "auto",
 ) -> list[dict]:
     words: list[dict] = []
-    for seg in raw_segments or []:
+    for seg_no, seg in enumerate(raw_segments or []):
         if not isinstance(seg, dict):
             continue
         for word in seg.get("words") or []:
@@ -602,7 +869,7 @@ def from_whisper(
             if not token:
                 continue
             try:
-                words.append({"start": float(word["start"]), "end": float(word["end"]), "text": token})
+                words.append({"start": float(word["start"]), "end": float(word["end"]), "text": token, "seg": seg_no})
             except (KeyError, TypeError, ValueError):
                 continue
     if stereo is not None:
@@ -622,6 +889,8 @@ def from_whisper(
         voiced = voice_turns(words, audio, sr, operator_first=operator_first)
         if voiced:
             return annotate_pauses(voiced, audio, sr)
+    if words:
+        return annotate_pauses(dialog_turns(words, audio, sr, operator_first=operator_first), audio, sr)
     regions = speech_regions(audio, sr) if audio is not None and sr else None
     if words:
         turns = utterances_from_words(words, regions)
