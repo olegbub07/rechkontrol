@@ -19,6 +19,7 @@ COPY samples ./samples
 ARG BAKE_MODELS=0
 RUN if [ "$BAKE_MODELS" = "1" ]; then python scripts/download_models.py --dir /opt/models && chmod -R a+rX /opt/models; fi
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i "s/\r$//" /usr/local/bin/docker-entrypoint.sh
 
 # Внутри контейнера слушаем все интерфейсы контейнера; наружу порт публикуется
 # только на 127.0.0.1 хоста (docker-compose.yml).
