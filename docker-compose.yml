@@ -27,7 +27,12 @@ services:
       retries: 20
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # 1 - вшить Whisper и e5 в образ (офлайн-сервер, см. docs/DEPLOY.md)
+        BAKE_MODELS: ${BAKE_MODELS:-0}
+    image: rechkontrol:latest
     restart: unless-stopped
     depends_on:
       db:
@@ -54,6 +59,8 @@ services:
       # Ключ шифрования в отдельном томе, не рядом с данными. Со старой версии ключ
       # из data/master.key переносится сюда сам при первом запуске.
       MASTER_KEY_FILE: /app/keys/master.key
+      # Поиск по смыслу в чек-листе (off | auto | on), docs/QUALITY.md
+      SEMANTIC_MATCH: ${SEMANTIC_MATCH:-off}
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
       # ollama - сервис этой же compose-сети на этой машине, наружу текст не уходит.
