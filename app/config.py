@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     llm_weight: float = 0.5
     # Разрешить нелокальный OLLAMA_URL (текст звонка уйдёт с машины). По умолчанию запрещено.
     llm_allow_remote: bool = False
+    # Поиск по смыслу для чек-листа (app/semantic.py, модель multilingual-e5-small, CPU).
+    # off - только точные фразы; auto - если модель лежит в data/models, иначе тихо только фразы;
+    # on - то же, но с предупреждением в журнале, если модели нет. Сама модель не скачивается.
+    semantic_match: str = "off"
+    semantic_model_dir: str = ""
+    # Сдвиг всех порогов похожести: +0.01 строже (меньше срабатываний), -0.01 мягче.
+    semantic_threshold_offset: float = 0.0
+    semantic_threads: int = 0
     whisper_beam_size: int = 5
     whisper_batch_size: int = 8
     whisper_cpu_threads: int = 0

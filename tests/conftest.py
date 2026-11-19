@@ -14,6 +14,8 @@ os.environ["DATA_DIR"] = str(_TEST_DATA)
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", "")
 os.environ.setdefault("DEMO_VOICE_ENABLED", "false")
 os.environ.setdefault("LLM_PROVIDER", "none")
+# Поиск по смыслу в тестах только с подменённым кодировщиком (tests/test_semantic.py), модель не грузится.
+os.environ["SEMANTIC_MATCH"] = "off"
 # Автоудаление по сроку в фоне тестам не нужно: его проверяет tests/test_152fz.py напрямую.
 os.environ["RETENTION_DAYS"] = "0"
 # Ключ только свой, в каталоге тестов.

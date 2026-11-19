@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
+from app import semantic
 from app.checklist import BOUNCE_PENALTY, RUDE_PENALTY, by_id, default_checklist
 from app.diarize import normalize
 
@@ -279,6 +280,8 @@ class CheckResult:
     weight: float
     detail: str
     evidence: str | None = None
+    # Засчитано по смыслу (app/semantic.py): {"text": предложение, "score": косинус, "example": пример}.
+    semantic: dict | None = None
 
 
 @dataclass
@@ -355,6 +358,11 @@ def _self_named(turns: list[dict]) -> str | None:
 
 def _clip(value: float) -> float:
     return round(max(0.0, min(100.0, value)), 1)
+
+
+def _snippet(text: str) -> str:
+    snippet = str(text or "").strip()
+    return snippet[:157] + "…" if len(snippet) > 160 else snippet
 
 
 def _evidence(turns: list[dict], phrases: tuple[str, ...] | list[str], role: str | None = "operator") -> str | None:
@@ -598,10 +606,36 @@ def analyze(
     )
 
     checks: list[CheckResult] = []
+    # Поиск по смыслу: только там, где точная фраза не нашлась. Без модели matcher неактивен.
+    matcher = semantic.Matcher(turns) if semantic.mode() != "off" else None
+    sem_hits: dict[str, semantic.SemanticHit] = {}
+    op_first2 = {i for i, t in enumerate(turns) if t.get("role") == "operator"}
+    op_first2 = set(sorted(op_first2)[:2])
+
+    def by_sense(cid: str, only_turns: set[int] | None = None) -> str | None:
+        if matcher is None or not matcher.active or not on(cid):
+            return None
+        hit = matcher.find(cid, only_turns)
+        if hit is None:
+            return None
+        sem_hits[cid] = hit
+        return hit.norm
+
+    if not greet_hit:
+        greet_hit = by_sense("greeting", op_first2)
+    if not rude_hit:
+        rude_hit = by_sense("no_rudeness")
 
     def add(cid, title, category, passed, score, weight, detail, evidence=None):
         if not on(cid):
             return
+        sem = sem_hits.get(cid)
+        info = None
+        if sem is not None:
+            info = {"text": sem.text, "score": sem.score, "example": sem.example}
+            detail = f"{detail} Найдено по смыслу: похоже на «{sem.example}» ({sem.score:.2f})."
+            if evidence is None:
+                evidence = _snippet(turns[sem.turn_index]["text"])
         checks.append(
             CheckResult(
                 id=cid,
@@ -612,6 +646,7 @@ def analyze(
                 weight=float(cfg[cid]["weight"]),
                 detail=detail,
                 evidence=evidence,
+                semantic=info,
             )
         )
 
@@ -625,7 +660,7 @@ def analyze(
         "Оператор поприветствовал клиента." if greet_hit else "В начале разговора нет приветствия.",
         _evidence(op_turns[:2], ph("greeting")) if greet_hit else None,
     )
-    intro_hit = _has(op_text, ph("intro")) or _self_named(turns)
+    intro_hit = _has(op_text, ph("intro")) or _self_named(turns) or by_sense("intro")
     add(
         "intro",
         "Представление оператора",
@@ -647,7 +682,7 @@ def analyze(
         "Названа организация." if company_hit else "В речи оператора нет названия компании.",
         _evidence(turns, company) if company_hit else None,
     )
-    help_hit = _has(op_text, ph("help_offer"))
+    help_hit = _has(op_text, ph("help_offer")) or by_sense("help_offer")
     add(
         "help_offer",
         "Предложение помощи",
@@ -669,7 +704,7 @@ def analyze(
         "Оператор уточнил детали обращения." if clarify_hit else "Нет уточняющих вопросов по сути запроса.",
         _evidence(turns, ph("clarify")) if clarify_hit else None,
     )
-    close_hit = _has(op_text, ph("closing"))
+    close_hit = _has(op_text, ph("closing")) or by_sense("closing")
     add(
         "closing",
         "Корректное завершение",
@@ -735,7 +770,7 @@ def analyze(
         1.0,
         "Оператор перешёл на «ты»." if ty_hit else "Соблюдено обращение на «вы».",
     )
-    empathy_hit = _has(op_text, ph("empathy"))
+    empathy_hit = _has(op_text, ph("empathy")) or by_sense("empathy")
     client_neg = bool(_has(client_text, NEG_WORDS))
     empathy_needed = client_neg
     empathy_ok = bool(empathy_hit) or not empathy_needed
@@ -796,7 +831,7 @@ def analyze(
         resp_detail = f"Средняя пауза перед ответом оператора: {avg_resp:.1f} с."
     add("response_time", "Время ответа", "completeness", resp_ok, resp_score, 0.8, resp_detail)
 
-    res_hit = _has(op_text, ph("resolution_lang"))
+    res_hit = _has(op_text, ph("resolution_lang")) or by_sense("resolution_lang")
     add(
         "resolution_lang",
         "Предложено решение",
@@ -807,7 +842,7 @@ def analyze(
         "Оператор озвучил конкретное действие или результат." if res_hit else "Нет явного решения или фиксации результата.",
         _evidence(turns, ph("resolution_lang")) if res_hit else None,
     )
-    next_hit = _has(op_text, ph("next_steps"))
+    next_hit = _has(op_text, ph("next_steps")) or by_sense("next_steps")
     add(
         "next_steps",
         "Понятные следующие шаги",
@@ -818,9 +853,7 @@ def analyze(
         "Назван срок, канал или номер обращения." if next_hit else "Клиент не получил ясного следующего шага.",
         _evidence(turns, ph("next_steps")) if next_hit else None,
     )
-    confirm_hit = _has(op_text, ph("confirm")) or _has(
-        client_text, CLIENT_OK
-    )
+    confirm_hit = _has(op_text, ph("confirm")) or _has(client_text, CLIENT_OK) or by_sense("confirm")
     add(
         "confirm",
         "Подтверждение, что вопрос закрыт",
@@ -830,7 +863,7 @@ def analyze(
         1.0,
         "Есть подтверждение закрытия вопроса." if confirm_hit else "Нет подтверждения, что клиент удовлетворён.",
     )
-    bounce = _has(op_text, ph("no_hanging"))
+    bounce = _has(op_text, ph("no_hanging")) or by_sense("no_hanging")
     hanging = (not close_hit and not res_hit) or bool(bounce)
     add(
         "no_hanging",

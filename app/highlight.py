@@ -125,15 +125,21 @@ def segment_highlights(
             return extra
         return list(src or [])
 
+    def with_sense(cid: str) -> list[str]:
+        # Пункт засчитан по смыслу (app/semantic.py): подсвечиваем само предложение.
+        sem = (by_check.get(cid) or {}).get("semantic")
+        extra_text = [str(sem["text"])] if isinstance(sem, dict) and sem.get("text") else []
+        return phrases(cid) + extra_text
+
     rules: list[tuple[str, str, list[str]]] = []  # (kind, check_id, phrases)
     for cid in POSITIVE_PHRASE:
         ch = by_check.get(cid)
         if ch and ch.get("passed"):
-            rules.append(("ok", cid, phrases(cid)))
+            rules.append(("ok", cid, with_sense(cid)))
     for cid in NEGATIVE_PHRASE:
         ch = by_check.get(cid)
         if ch and not ch.get("passed"):
-            rules.append(("bad", cid, phrases(cid)))
+            rules.append(("bad", cid, with_sense(cid)))
     tutoyage = by_check.get("no_tutoyage")
     tutoyage_bad = bool(tutoyage and not tutoyage.get("passed"))
 
